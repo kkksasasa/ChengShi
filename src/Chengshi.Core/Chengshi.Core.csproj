@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Chengshi.Core</RootNamespace>
+    <Description>书桌模型、白名单匹配、无偏时钟、会话状态机</Description>
+  </PropertyGroup>
+</Project>

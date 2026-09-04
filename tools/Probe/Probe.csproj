@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Chengshi.Probe</RootNamespace>
+    <AssemblyName>probe</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Chengshi.Engine\Chengshi.Engine.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,27 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+[Dd]ebug/
+[Rr]elease/
+*.log
+*.db
+*.db-shm
+*.db-wal
+nupkg/
+TestResults/
+*.DotSettings.user
+.DS_Store
+Thumbs.db
+publish/
+artifacts/
+dist/
+*.pfx
+*.snk
+
+# AI 助手的工作笔记，不入库
+.workbuddy/

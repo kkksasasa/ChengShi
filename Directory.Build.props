@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <NeutralLanguage>zh-CN</NeutralLanguage>
+    <Authors>澄时</Authors>
+    <Product>澄时</Product>
+    <Company>澄时</Company>
+    <Version>1.1.1</Version>
+  </PropertyGroup>
+</Project>

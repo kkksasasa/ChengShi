@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Chengshi.App/Chengshi.App.csproj" />
+    <Project Path="src/Chengshi.Core/Chengshi.Core.csproj" />
+    <Project Path="src/Chengshi.Engine/Chengshi.Engine.csproj" />
+    <Project Path="src/Chengshi.Ipc/Chengshi.Ipc.csproj" />
+    <Project Path="src/Chengshi.Service/Chengshi.Service.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Chengshi.Core.Tests/Chengshi.Core.Tests.csproj" />
+    <Project Path="tests/Chengshi.Engine.Tests/Chengshi.Engine.Tests.csproj" />
+  </Folder>
+</Solution>

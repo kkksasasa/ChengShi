@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>Chengshi.App</RootNamespace>
+    <AssemblyName>Chengshi.App</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\chengshi.ico</ApplicationIcon>
+    <ApplicationTitle>澄时</ApplicationTitle>
+    <Product>澄时</Product>
+    <AssemblyTitle>澄时</AssemblyTitle>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Chengshi.Engine\Chengshi.Engine.csproj" />
+    <Resource Include="Assets\chengshi.ico" />
+    <Content Include="Assets\chengshi.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\chengshi.ico" CopyToOutputDirectory="PreserveNewest" Link="chengshi.ico" />
+    <None Include="startup.vbs" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+    <Using Include="System.IO" />
+  </ItemGroup>
+</Project>

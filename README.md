@@ -24,7 +24,7 @@
 
 | 家长仪表盘 | 孩子书桌 | 时间用完锁屏 |
 |---|---|---|
-| ![家长仪表盘](design/ui-01-parent-dashboard.png) | ![孩子书桌](design/ui-02-kid-desk-extra-time.png) | ![时间用完锁屏](design/ui-03-time-up-lock.png) |
+| ![家长仪表盘](docs/screens/dashboard.png) | ![孩子书桌](docs/screens/kid-desk.png) | ![时间用完锁屏](docs/screens/time-up.png) |
 
 - **家长仪表盘**：挑书桌、设时长，点「开始守护」；今天还剩多少、最近七天用了多少，一眼可见。
 - **孩子书桌**：桌面上只有允许的软件和大大的倒计时；时间不够可以申请加时，家长选个时长、输密码当场批准。

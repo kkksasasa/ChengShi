@@ -66,7 +66,7 @@
 
       <Grid Grid.Row="1">
         <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="232"/>
+          <ColumnDefinition x:Name="SidebarColumn" Width="232"/>
           <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
@@ -1286,19 +1286,14 @@
 
           <!-- ===== 孩子视图（守护中）：书桌场景 ui-02 + 时间用完夜晚场景 ui-03 ===== -->
           <Grid x:Name="ChildRoot" Visibility="Collapsed" Background="{StaticResource KidDeskBackdrop}">
-            <Grid Margin="36,24,36,24">
+            <!-- 书桌进行中：白名单应用磁贴 + 大倒计时 -->
+            <Grid x:Name="DeskPanel" Margin="36,24,36,24">
               <Grid.RowDefinitions>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
               </Grid.RowDefinitions>
-
-              <!-- 书桌进行中：白名单应用磁贴 + 大倒计时 -->
-              <Grid x:Name="DeskPanel" Grid.Row="0">
-                <Grid.RowDefinitions>
-                  <RowDefinition Height="*"/>
-                  <RowDefinition Height="Auto"/>
-                  <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
 
                 <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
                   <Border Style="{StaticResource StatusPill}" HorizontalAlignment="Center" Margin="0,0,0,14">
@@ -1392,19 +1387,28 @@
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
+
+              <Button x:Name="AskParentButton"
+                      Grid.Row="3"
+                      Content="找家长（改时间 / 软件 / 退出）"
+                      Style="{StaticResource OutlineButton}"
+                      HorizontalAlignment="Center"
+                      MinWidth="240"
+                      Margin="0,10,0,0"
+                      Click="AskParent_Click"/>
               </Grid>
 
-              <!-- 时间用完：夜晚锁屏（对应设计稿 ui-03） -->
-              <Grid x:Name="TimeUpPanel" Grid.Row="0" Visibility="Collapsed">
+              <!-- 时间用完：夜晚锁屏（对应设计稿 ui-03），全出血铺满内容区 -->
+              <Grid x:Name="TimeUpPanel" Margin="0" Visibility="Collapsed">
                 <Border Background="{StaticResource NightBackdrop}"/>
                 <ScrollViewer VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled">
                   <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="40,28,40,64" MaxWidth="560">
                     <Canvas Width="176" Height="118" HorizontalAlignment="Center" Margin="0,0,0,10" IsHitTestVisible="False">
-                      <!-- 月亮 -->
+                      <!-- 月亮：外弧走左缘，内弧小弧收回，围出月牙 -->
                       <Path Fill="{StaticResource MoonBrush}"
-                            Data="M 78,6 A 50,50 0 1 0 78,106 A 40,40 0 1 1 78,6 Z"/>
-                      <Path Data="M 36,50 Q 40,55 44,50 M 52,60 Q 56,65 60,60 M 40,72 Q 48,79 56,72"
+                            Data="M 78,6 A 50,50 0 1 0 78,106 A 64,64 0 0 1 78,6 Z"/>
+                      <Path Data="M 30,48 Q 34,53 38,48 M 40,60 Q 44,65 48,60 M 34,72 Q 42,79 50,72"
                             Stroke="#C79A4B" StrokeThickness="2.4"
                             StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
                       <!-- 闹钟 -->
@@ -1451,6 +1455,14 @@
                                Foreground="{StaticResource NightFaintBrush}"
                                HorizontalAlignment="Center"
                                Margin="0,16,0,0"/>
+                    <Button x:Name="AskParentNight"
+                            Content="找家长（改时间 / 软件 / 退出）"
+                            Style="{StaticResource NightGhostButton}"
+                            HorizontalAlignment="Center"
+                            MinWidth="240"
+                            Margin="0,14,0,0"
+                            Visibility="Collapsed"
+                            Click="AskParent_Click"/>
                   </StackPanel>
                 </ScrollViewer>
                 <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="30,0,0,20"
@@ -1477,16 +1489,6 @@
                   </StackPanel>
                 </Border>
               </Grid>
-
-              <Button x:Name="AskParentButton"
-                      Grid.Row="1"
-                      Content="找家长（改时间 / 软件 / 退出）"
-                      Style="{StaticResource OutlineButton}"
-                      HorizontalAlignment="Center"
-                      MinWidth="240"
-                      Margin="0,10,0,0"
-                      Click="AskParent_Click"/>
-            </Grid>
           </Grid>
 
           <!-- 护眼休息提醒遮罩（守护中弹出，温柔不强制） -->

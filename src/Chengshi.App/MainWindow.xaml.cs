@@ -1791,6 +1791,7 @@ public partial class MainWindow : Window
         ShowChild(child);
         Background = (Brush)FindResource(child ? "PaperDeepBrush" : "PaperBrush");
         AskParentButton.Visibility = snapshot.Parental ? Visibility.Visible : Visibility.Collapsed;
+        AskParentNight.Visibility = AskParentButton.Visibility;
 
         // 时间用完切到夜晚锁屏面板（ui-03），其余状态留在书桌场景（ui-02）。
         var timeUp = snapshot.Phase == SessionPhase.TimeUp;
@@ -1864,8 +1865,9 @@ public partial class MainWindow : Window
 
     private void ShowChild(bool on)
     {
-        // 守护中隐藏侧边栏，孩子视图独占整个窗口。
+        // 守护中隐藏侧边栏（连列宽一起归零），孩子视图独占整个窗口。
         Sidebar.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
+        SidebarColumn.Width = on ? new GridLength(0) : new GridLength(232);
 
         if (on && ChildRoot.Visibility != Visibility.Visible)
         {

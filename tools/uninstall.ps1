@@ -20,6 +20,19 @@ if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
     Write-Host '未发现服务（跳过）。'
 }
 
+Write-Step '移除断网防火墙规则'
+& netsh.exe advfirewall firewall delete rule name='Chengshi-NoInternet' | Out-Null
+
+Write-Step '清除浏览器上网策略'
+# 绿色上网通过 Chrome/Edge 企业策略注入，卸载时清掉我们的策略值，
+# 避免守护中卸载（或崩溃残留）让浏览器一直显示"由组织管理"。
+foreach ($browser in @('Google\Chrome', 'Microsoft\Edge')) {
+    $policyKey = "HKLM:\SOFTWARE\Policies\$browser"
+    foreach ($value in @('URLBlocklist', 'URLAllowlist', 'URLBlocklistEnabled')) {
+        Remove-ItemProperty -Path $policyKey -Name $value -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Step '删除快捷方式'
 $startMenu = Join-Path ${env:ProgramData} 'Microsoft\Windows\Start Menu\Programs'
 @(

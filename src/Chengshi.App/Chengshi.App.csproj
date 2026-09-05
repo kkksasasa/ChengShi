@@ -14,6 +14,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Chengshi.Engine\Chengshi.Engine.csproj" />
     <Resource Include="Assets\chengshi.ico" />
+    <Resource Include="Assets\donate-alipay.jpg" />
+    <Resource Include="Assets\donate-wechat.jpg" />
     <Content Include="Assets\chengshi.ico" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\chengshi.ico" CopyToOutputDirectory="PreserveNewest" Link="chengshi.ico" />
     <None Include="startup.vbs" CopyToOutputDirectory="PreserveNewest" />

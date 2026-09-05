@@ -1287,6 +1287,18 @@
                                FontSize="13"
                                TextWrapping="Wrap"
                                LineHeight="20"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                      <Button Content="支持澄时 ☕"
+                              Style="{StaticResource OutlineButton}"
+                              HorizontalAlignment="Left"
+                              AutomationProperties.Name="赞助开发者"
+                              Click="Sponsor_Click"/>
+                      <TextBlock Text="澄时免费无广告，赞助全凭心意。"
+                                 FontSize="11"
+                                 Foreground="{StaticResource FaintBrush}"
+                                 VerticalAlignment="Center"
+                                 Margin="10,0,0,0"/>
+                    </StackPanel>
                   </StackPanel>
                 </Border>
               </StackPanel>

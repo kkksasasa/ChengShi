@@ -1333,6 +1333,11 @@ public partial class MainWindow : Window
         });
     }
 
+    private void Sponsor_Click(object sender, RoutedEventArgs e)
+    {
+        new SponsorWindow { Owner = this }.ShowDialog();
+    }
+
     private void Nav_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not RadioButton { IsChecked: true } nav)

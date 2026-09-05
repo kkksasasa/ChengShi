@@ -43,6 +43,20 @@ $svcSrc = Join-Path $root "artifacts\publish\service"
 if (-not (Test-Path (Join-Path $appSrc "Chengshi.App.exe"))) { throw "请先运行 scripts\publish.ps1。" }
 if (-not (Test-Path (Join-Path $svcSrc "Chengshi.Service.exe"))) { throw "Service 发布产物缺失。" }
 
+# ---- 0. 停止正在运行的澄时：服务/托盘进程锁着 Program Files 里的文件，覆盖复制会失败 ----
+Write-Step "停止正在运行的澄时（服务与托盘）"
+if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
+    Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+    & sc.exe stop $serviceName | Out-Null
+}
+$stopDeadline = (Get-Date).AddSeconds(20)
+foreach ($procName in @("Chengshi.Service", "Chengshi.App")) {
+    while ((Get-Date) -lt $stopDeadline -and (Get-Process -Name $procName -ErrorAction SilentlyContinue)) {
+        Stop-Process -Name $procName -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 400
+    }
+}
+
 # ---- 1. 复制到 Program Files（App/Service 分目录，ServiceControl 按这个布局找服务）----
 Write-Step "复制文件到 $installRoot"
 New-Item -ItemType Directory -Force -Path $appDir, $svcDir | Out-Null

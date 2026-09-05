@@ -83,9 +83,43 @@ if (-not (Test-Path (Join-Path $appPub 'Chengshi.App.exe'))) { throw 'App 发布
 if (-not (Test-Path (Join-Path $svcPub 'Chengshi.Service.exe'))) { throw 'Service 发布产物缺失。' }
 
 # ---- 2. 复制到 Program Files ----
+# 2.0 先停干净正在运行的澄时：服务进程锁着 Service 目录的 DLL，托盘进程锁着 App 目录的，
+#     不停就删/换文件必失败（升级与重装场景都会踩）。
+Write-Step '停止正在运行的澄时（服务与托盘）'
+if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
+    Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+    & sc.exe stop $serviceName | Out-Null
+}
+$deadline = (Get-Date).AddSeconds(20)
+foreach ($procName in @('Chengshi.Service', 'Chengshi.App')) {
+    while ((Get-Date) -lt $deadline -and (Get-Process -Name $procName -ErrorAction SilentlyContinue)) {
+        Stop-Process -Name $procName -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 400
+    }
+}
+# 服务标记删除，稍后第 3 步会重新注册。
+if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
+    & sc.exe delete $serviceName | Out-Null
+    Start-Sleep -Milliseconds 500
+}
+
+function Remove-Stamped($dir) {
+    if (-not (Test-Path $dir)) { return }
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Remove-Item $dir -Recurse -Force -ErrorAction Stop
+            return
+        } catch {
+            Write-Warning "第 $attempt 次清理 $dir 失败：$($_.Exception.Message)"
+            Start-Sleep -Seconds (2 * $attempt)
+        }
+    }
+    throw "无法删除 $dir：文件仍被占用。请退出澄时托盘（或重启电脑）后重新运行安装。"
+}
+
 Write-Step '复制到 Program Files'
-if (Test-Path $appDir) { Remove-Item $appDir -Recurse -Force }
-if (Test-Path $svcDir) { Remove-Item $svcDir -Recurse -Force }
+Remove-Stamped $appDir
+Remove-Stamped $svcDir
 New-Item -ItemType Directory -Path $appDir -Force | Out-Null
 New-Item -ItemType Directory -Path $svcDir -Force | Out-Null
 Copy-Item -Path (Join-Path $appPub '*') -Destination $appDir -Recurse -Force

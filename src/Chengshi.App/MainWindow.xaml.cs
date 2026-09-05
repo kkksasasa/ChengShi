@@ -209,7 +209,18 @@ public partial class MainWindow : Window
 
     private void OnTick(object? sender, EventArgs e)
     {
-        var snapshot = _host.Tick();
+        SessionSnapshot snapshot;
+        try
+        {
+            snapshot = _host.Tick();
+        }
+        catch (Exception ex)
+        {
+            // 单次刷新失败不许打断倒计时和界面：记日志，下一秒重试。
+            FileLog.Error("app", "守护状态刷新失败，本秒跳过。", ex);
+            return;
+        }
+
         AccumulateBreak(snapshot);
         Render(snapshot);
     }

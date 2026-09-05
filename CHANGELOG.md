@@ -2,6 +2,16 @@
 
 本项目的全部重要变更都会记录在这里。版本号遵循语义化版本（SemVer）。
 
+## [0.1.3] - 2026-09-05
+
+### 修复
+
+- **守护中倒计时冻结、反复弹「Unable to find an entry point named
+  'WtsGetActiveConsoleSessionId' in DLL 'kernel32.dll'」**：个别精简版 / 老版 Windows 的
+  kernel32 没有该导出，而每秒的守护 Tick 在 UI 线程上调用它，异常把整个刷新链打断。现在
+  会话检测带降级链：kernel32 导出 → wtsapi32 枚举会话（取 State=Active）→ 当前进程会话；
+  界面每秒刷新也加了兜底，单次失败记日志跳过、下一秒重试，不再冻结或连续弹窗。
+
 ## [0.1.2] - 2026-09-05
 
 ### 修复

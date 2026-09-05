@@ -624,6 +624,12 @@ public partial class MainWindow : Window
                 BedtimeBox.IsChecked = bedtime;
             }
 
+            var guardOnLaunch = _host.Family?.GuardOnLaunch ?? true;
+            if (GuardOnLaunchBox.IsChecked != guardOnLaunch)
+            {
+                GuardOnLaunchBox.IsChecked = guardOnLaunch;
+            }
+
             _breakReminderMinutes = _host.Family?.BreakReminderMinutes ?? 0;
             BreakOff.IsChecked = _breakReminderMinutes == 0;
             Break30.IsChecked = _breakReminderMinutes == 30;
@@ -654,6 +660,16 @@ public partial class MainWindow : Window
     }
 
     private void Bedtime_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_ready || _refreshing)
+        {
+            return;
+        }
+
+        PersistFamilyIfConfigured();
+    }
+
+    private void GuardOnLaunch_Changed(object sender, RoutedEventArgs e)
     {
         if (!_ready || _refreshing)
         {
@@ -720,6 +736,7 @@ public partial class MainWindow : Window
                 WeekendMinutes = _weekendMinutes,
                 DeskId = desk.Id,
                 StartWithWindows = startWithWindows,
+                GuardOnLaunch = GuardOnLaunchBox.IsChecked == true,
                 BedtimeEnabled = BedtimeBox.IsChecked == true,
                 BreakReminderMinutes = _breakReminderMinutes,
                 Schedule = _schedule,

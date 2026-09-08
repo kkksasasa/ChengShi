@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" />
+  <title>澄时</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body class="mode-parent">
+  <!-- ===== SVG 图标库 ===== -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <symbol id="i-logo" viewBox="0 0 20 20">
+      <path d="M 10,1 L 17,7 L 14,8.5 L 12.5,7.5 L 12.5,14 L 7.5,14 L 7.5,7.5 L 6,8.5 L 3,7 Z" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/>
+        <rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/>
+      </g>
+    </symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <path d="M4 6h16M4 12h16M4 18h16"/>
+        <circle cx="15" cy="6" r="2.2" fill="currentColor" stroke="none"/>
+        <circle cx="8" cy="12" r="2.2" fill="currentColor" stroke="none"/>
+        <circle cx="13" cy="18" r="2.2" fill="currentColor" stroke="none"/>
+      </g>
+    </symbol>
+    <symbol id="i-help" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <circle cx="12" cy="12" r="8.5"/>
+        <path d="M9.6 9.3a2.5 2.5 0 1 1 3.4 2.9c-.8.35-1 .9-1 1.8"/>
+        <circle cx="12" cy="17" r=".4" fill="currentColor"/>
+      </g>
+    </symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 20h16M6.5 16.5 16 7l-3-3-9.5 9.5v3z"/><path d="m14.5 5.5 3 3"/>
+      </g>
+    </symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4.5" width="18" height="11.5" rx="1.8"/><path d="M8.5 20h7M12 16.5V20"/>
+      </g>
+    </symbol>
+    <symbol id="i-code" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m9 8-4.5 4L9 16M15 8l4.5 4L15 16"/>
+      </g>
+    </symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2.8 19 5.4v6.1c0 4.6-3 7.5-7 9.2-4-1.7-7-4.6-7-9.2V5.4z"/>
+        <path d="m9 11.6 2.1 2.1L15.3 9.5"/>
+      </g>
+    </symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <path d="M3 12c2.6-4 5.7-6 9-6s6.4 2 9 6c-2.6 4-5.7 6-9 6s-6.4-2-9-6z"/>
+        <circle cx="12" cy="12" r="2.6"/>
+      </g>
+    </symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/>
+      </g>
+    </symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 6.5 8.5 6 8.5-6"/>
+      </g>
+    </symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.5h8.4A1.5 1.5 0 0 1 21 9v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18z"/>
+      </g>
+    </symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 20.5S3.5 15.5 3.5 9.6C3.5 6.8 5.7 4.5 8.4 4.5c1.5 0 2.9.7 3.6 1.9.7-1.2 2.1-1.9 3.6-1.9 2.7 0 4.9 2.3 4.9 5.1 0 5.9-8.5 10.9-8.5 10.9z"/>
+      </g>
+    </symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24">
+      <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m9 6 6 6-6 6"/>
+    </symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24">
+      <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M5.5 12h13"/>
+    </symbol>
+    <symbol id="i-x" viewBox="0 0 24 24">
+      <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="m6.5 6.5 11 11m0-11-11 11"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24">
+      <path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="m5 12.5 4.5 4.5L19 7.5"/>
+    </symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 4v15a1 1 0 0 0 1 1h15"/>
+        <path d="M9 16.5v-5M13 16.5v-9M17 16.5v-6.5"/>
+      </g>
+    </symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>
+      </g>
+    </symbol>
+  </svg>
+
+  <!-- ===== 标题栏（app-region: drag） ===== -->
+  <header id="titlebar">
+    <div class="tb-left">
+      <svg class="tb-logo"><use href="#i-logo"/></svg>
+      <span class="tb-name">澄时</span>
+      <span id="tbPill" class="pill pill-muted">
+        <span class="pill-dot"></span><span id="tbPillText">未设置</span>
+      </span>
+    </div>
+    <div class="tb-right">
+      <button id="btnMin" class="tb-btn" title="最小化到托盘" app-region="no-drag"><svg class="ic"><use href="#i-minus"/></svg></button>
+      <button id="btnClose" class="tb-btn tb-close" title="关闭" app-region="no-drag"><svg class="ic"><use href="#i-x"/></svg></button>
+    </div>
+  </header>
+
+  <div id="app">
+    <!-- ================= 家长视图 ================= -->
+    <div id="parentView">
+      <aside id="sidebar">
+        <div class="side-head">
+          <div class="side-title">守护中心</div>
+          <div class="side-sub">屏幕时间 · 软件白名单</div>
+        </div>
+        <nav class="side-nav">
+          <button class="nav-item active" data-page="dashboard"><svg class="ic"><use href="#i-grid"/></svg><span>仪表盘</span></button>
+          <button class="nav-item" data-page="settings"><svg class="ic"><use href="#i-sliders"/></svg><span>守护设置</span></button>
+          <button class="nav-item" data-page="stats"><svg class="ic"><use href="#i-chart"/></svg><span>使用统计</span></button>
+          <button class="nav-item" data-page="help"><svg class="ic"><use href="#i-help"/></svg><span>帮助</span></button>
+        </nav>
+        <div class="side-engine">
+          <div class="se-line"><span class="se-dot" id="engineDot"></span><span id="engineTitle">守护引擎</span></div>
+          <div class="se-detail" id="engineDetail">正在检查…</div>
+        </div>
+      </aside>
+
+      <main id="content">
+        <!-- ===== 仪表盘 ===== -->
+        <section id="page-dashboard" class="page active">
+          <div class="card hero">
+            <div class="hero-icon"><svg class="ic-lg"><use href="#i-shield"/></svg></div>
+            <div class="hero-text">
+              <div class="hero-greeting" id="greeting">你好</div>
+              <div class="hero-line" id="heroLine"></div>
+            </div>
+          </div>
+
+          <div class="desk-cards" id="deskCards"></div>
+
+          <div class="dash-grid">
+            <div class="card budget-card">
+              <div class="card-title">电脑总时长</div>
+              <div class="budget-body">
+                <div class="donut-wrap">
+                  <svg class="donut" viewBox="0 0 128 128">
+                    <circle class="donut-track" cx="64" cy="64" r="57.5"/>
+                    <circle class="donut-arc" id="donutArc" cx="64" cy="64" r="57.5"/>
+                  </svg>
+                  <div class="donut-center">
+                    <div class="donut-remaining" id="donutRemaining">—</div>
+                    <div class="donut-label">剩余</div>
+                  </div>
+                </div>
+                <div class="budget-side">
+                  <div class="budget-used" id="donutUsed">已用 — / 共 1 小时</div>
+                  <div class="budget-hint" id="donutHint"></div>
+                  <div class="v-divider"></div>
+                  <div class="limit-line" id="weekdayLimit">周内每天 1 小时</div>
+                  <div class="limit-line" id="weekendLimit">周末每天 2 小时</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card week-card">
+              <div class="card-title-row">
+                <div class="card-title">最近七天用量</div>
+                <div class="card-aside">每天用了多久</div>
+              </div>
+              <div class="week-bars" id="weekBars"></div>
+              <div class="empty-note" id="weekEmpty">跨天之后，这里会画出每天大概用了多久。</div>
+            </div>
+          </div>
+
+          <div class="dash-actions">
+            <button id="guardBtn" class="btn btn-primary btn-lg">完成家长设置</button>
+            <button id="rewardBtn" class="btn btn-ghost hidden">奖励 15 分钟</button>
+          </div>
+
+          <div class="dash-grid dash-grid-2">
+            <div class="card">
+              <div class="card-title">最近拦截</div>
+              <div class="chips warn-chips" id="dashBlocked"></div>
+              <div class="empty-note" id="dashBlockedEmpty">守护中拦下的软件会显示在这里。</div>
+            </div>
+            <div class="card">
+              <div class="card-title">当前书桌</div>
+              <div class="cur-desk-name" id="curDeskName">写作业</div>
+              <div class="cur-desk-summary" id="curDeskSummary"></div>
+              <div class="chips" id="curDeskApps"></div>
+              <div class="empty-note" id="curDeskEmpty">还没选书桌。</div>
+              <button class="btn btn-ghost btn-link nav-go" data-page="settings">去调整 <svg class="ic ic-sm"><use href="#i-chevron"/></svg></button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">守护引擎</div>
+            <div class="engine-text" id="dashEngine"></div>
+            <div class="hint accent-hint" id="dashHint"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title-row">
+              <div class="card-title">今天各软件用了多久</div>
+              <div class="card-aside" id="appUsageHint"></div>
+            </div>
+            <div id="appUsageRows"></div>
+            <div class="empty-note" id="appUsageEmpty">守护开始后，这里会记下每个软件各用了多久。</div>
+          </div>
+        </section>
+
+        <!-- ===== 守护设置 ===== -->
+        <section id="page-settings" class="page">
+          <div class="settings-head">
+            <div class="settings-head-text">
+              <div class="page-title" id="setTitle">家长设置</div>
+              <div class="page-lead" id="setLead">改时长或软件后点开始守护。孩子在守护画面里改不了。</div>
+            </div>
+            <button id="guardBtn2" class="btn btn-primary">开始守护</button>
+          </div>
+
+          <!-- 守护生效预览：实时汇总所有规则叠加后的结果，回答「到底什么在生效」 -->
+          <div class="card preview-card">
+            <div class="preview-head" id="previewHead">点「开始守护」后，以下规则会同时生效：</div>
+            <ul class="preview-list" id="previewList"></ul>
+          </div>
+
+          <!-- 规则一 · 能用什么 ｜ 规则二 · 能用多久（两条规则同时生效） -->
+          <div class="scenario-grid">
+            <div class="card">
+              <div class="scenario-head">
+                <span class="scenario-title">能用什么</span><span class="scenario-tag">软件与网站</span>
+              </div>
+              <div class="scenario-lead">守护中，名单外的软件会被关掉。</div>
+
+              <div class="card-title">书桌</div>
+              <div class="desk-select-grid" id="deskGrid"></div>
+              <div class="empty-note hidden" id="unrestrictedNote" style="margin-top:12px">
+                这个场景不限制软件和网站：整台电脑随便用，只用「能用多久」里的时长来管。
+              </div>
+
+              <div id="presetSection">
+                <div class="field-label" style="margin-top:14px">拿不准？一键套用推荐组合：</div>
+                <div class="row wrap" id="presetRow">
+                  <button class="btn btn-outline btn-sm" data-preset="homework|60">小学生 · 写作业 1 小时</button>
+                  <button class="btn btn-outline btn-sm" data-preset="class|90">初中生 · 网课 1.5 小时</button>
+                  <button class="btn btn-outline btn-sm" data-preset="code|120">高中生 · 编程 2 小时</button>
+                </div>
+              </div>
+
+              <div id="appsSection">
+                <div class="row split" style="margin-top:24px">
+                  <div class="card-title">允许的软件</div>
+                  <button id="addAppsBtn" class="btn btn-outline btn-sm">添加 / 去掉</button>
+                </div>
+                <div class="chips" id="appChips"></div>
+                <div class="empty-note" id="appChipsEmpty">还没选软件。开始守护前至少加一款。</div>
+              </div>
+
+              <div id="sitesSection">
+                <div class="h-divider"></div>
+
+                <div class="card-title">网站规则（绿色上网）</div>
+                <div class="muted-note" id="sitesHint"></div>
+
+                <div class="field-label" style="margin-top:8px">允许的网站（留空 = 不限制）</div>
+                <div class="row">
+                  <input id="allowSiteInput" class="input grow" placeholder="如 ke.qq.com（课堂网址）" />
+                  <button id="addAllowSite" class="btn btn-outline">添加</button>
+                </div>
+                <div class="chips accent-chips" id="allowSiteChips"></div>
+                <div class="empty-note" id="allowSiteEmpty">还没填。填了之后，浏览器只能打开这些网站。</div>
+
+                <div class="field-label" style="margin-top:12px">禁止类别</div>
+                <label class="check"><input type="checkbox" id="catVideo"><span>短视频 / 直播（抖音、快手、B站…）</span></label>
+                <label class="check"><input type="checkbox" id="catGames"><span>游戏网站（4399、Steam 社区…）</span></label>
+                <label class="check"><input type="checkbox" id="catAdult"><span>成人内容</span></label>
+
+                <div class="field-label" style="margin-top:12px">禁止的网站</div>
+                <div class="row">
+                  <input id="blockSiteInput" class="input grow" placeholder="如 youku.com" />
+                  <button id="addBlockSite" class="btn btn-outline">添加</button>
+                </div>
+                <div class="chips" id="blockSiteChips"></div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="scenario-head">
+                <span class="scenario-title">能用多久</span><span class="scenario-tag">每天总时长</span>
+              </div>
+              <div class="scenario-lead">和「能用什么」同时生效：不管用哪个软件，每天累计用满就锁屏，周内 / 周末可以不同。</div>
+
+              <div class="seg-tabs">
+                <button class="seg-tab on" data-tab="weekday">周一至周五</button>
+                <button class="seg-tab" data-tab="weekend">周末</button>
+              </div>
+              <div class="minutes-big" id="minutesBig">1 小时</div>
+              <div class="muted-note" id="otherDays" style="margin-bottom:12px"></div>
+
+              <div class="pill-grid">
+                <button class="pill-btn" data-min="30">30 分</button>
+                <button class="pill-btn" data-min="60">1 小时</button>
+                <button class="pill-btn" data-min="90">90 分</button>
+                <button class="pill-btn" data-min="120">2 小时</button>
+                <button class="pill-btn" data-min="custom">自定义</button>
+              </div>
+              <div class="row hidden" id="customWrap" style="margin-top:8px">
+                <input id="customMinutes" class="input" style="width:84px" inputmode="numeric" placeholder="分钟" />
+                <span class="muted-note" style="margin:0">分钟 / 天，范围 5–600</span>
+              </div>
+              <div class="muted-note" id="whatHappens" style="margin-top:8px"></div>
+
+              <div class="h-divider"></div>
+
+              <div class="card-title">按星期排不同时长</div>
+              <div class="muted-note">默认按上面的基础时长。某天想多给或少给，在这里单独改，只有那一天生效。</div>
+              <div id="dayRows" style="margin-top:10px"></div>
+            </div>
+          </div>
+
+          <!-- 规则三 · 单个软件限时 -->
+          <div class="card" style="margin-top:16px">
+            <div class="scenario-head">
+              <span class="scenario-title">单个软件限时</span><span class="scenario-tag">可选</span>
+            </div>
+            <div class="scenario-lead">在「能用多久」之内，给某些软件单独设上限：比如游戏每天只给 30 分钟，用完就只关掉它，别的软件照常用。</div>
+            <div class="row" style="max-width:560px">
+              <select id="limitAppSelect" class="input grow"></select>
+              <input id="limitMinutes" class="input" style="width:72px" inputmode="numeric" placeholder="分钟" />
+              <button id="addLimit" class="btn btn-outline">加上这条限额</button>
+            </div>
+            <div id="limitRows" style="margin-top:10px"></div>
+            <div class="empty-note" id="limitEmpty">还没有单独限时。所有软件共用上面的每天总时长。</div>
+          </div>
+
+          <!-- 规则四 · 开机自动守护 -->
+          <div class="card" style="margin-top:16px">
+            <div class="scenario-head">
+              <span class="scenario-title">开机自动守护</span><span class="scenario-tag">什么时候开始</span>
+            </div>
+            <div class="scenario-lead">勾上后孩子开机就开始计总时长，不用家长动手。</div>
+            <label class="check check-row">
+              <input type="checkbox" id="guardOnLaunch">
+              <span class="check-text"><b>开机后自动开始守护</b><small>澄时一启动就进入守护，总时长从开机就计</small></span>
+            </label>
+            <label class="check check-row">
+              <input type="checkbox" id="startWithWindows">
+              <span class="check-text"><b>开机时启动澄时</b><small>家长端随 Windows 启动，托盘里随时能打开</small></span>
+            </label>
+            <div class="scene-svc">
+              <div class="hint accent-hint" id="serviceStatus" style="margin:0 0 8px"></div>
+              <div class="row wrap">
+                <button id="installService" class="btn btn-outline btn-sm">安装守护服务</button>
+                <button id="uninstallService" class="btn btn-ghost btn-sm hidden">卸载守护服务</button>
+              </div>
+              <div class="muted-note" style="margin-top:8px">装上守护服务：开机守护由系统执行、断网管控才生效，孩子也杀不掉进程。</div>
+            </div>
+          </div>
+
+          <!-- 支撑配置：密码与找回 ｜ 邮件 -->
+          <div class="scenario-grid" style="margin-top:16px">
+            <div class="card">
+              <div class="scenario-title">家长密码与找回</div>
+              <div class="scenario-lead">改规则、加时间、退出澄时都要用密码。</div>
+
+              <div id="pinFirstRun">
+                <div class="field-label" style="margin-top:8px">设置密码（至少 4 位）</div>
+                <input type="password" id="pinCreate" class="input" style="width:100%" inputmode="numeric" autocomplete="new-password" />
+                <div class="field-label" style="margin-top:12px">再输一次</div>
+                <input type="password" id="pinConfirm" class="input" style="width:100%" inputmode="numeric" autocomplete="new-password" />
+              </div>
+
+              <div id="pinConfigured" class="hidden">
+                <div class="field-label" style="margin-top:8px">找回码</div>
+                <div class="row">
+                  <div class="recovery-box" id="recoveryCode">————</div>
+                  <button id="copyRecovery" class="btn btn-outline" title="复制找回码"><svg class="ic ic-sm"><use href="#i-copy"/></svg></button>
+                </div>
+                <div class="muted-note" id="recoveryHint" style="margin:6px 0 14px">忘记密码时用，请抄下来或点「复制」存好。</div>
+
+                <div class="field-label">当前密码</div>
+                <input type="password" id="pinOld" class="input" style="width:100%" inputmode="numeric" autocomplete="current-password" />
+                <div class="field-label" style="margin-top:12px">新密码</div>
+                <input type="password" id="pinNew" class="input" style="width:100%" inputmode="numeric" autocomplete="new-password" />
+                <div class="field-label" style="margin-top:12px">再输一次</div>
+                <input type="password" id="pinNew2" class="input" style="width:100%" inputmode="numeric" autocomplete="new-password" />
+                <button id="changePin" class="btn btn-outline" style="margin-top:12px">保存新密码</button>
+                <div class="hint accent-hint" id="pinHint"></div>
+
+                <div class="h-divider"></div>
+
+                <div class="card-title">邮箱找回（可选）</div>
+                <div class="muted-note">留一个备用邮箱，忘记密码时用验证码找回，比记找回码更方便。</div>
+                <div class="field-label" style="margin-top:8px">备用邮箱</div>
+                <input id="recoveryEmail" class="input" style="width:100%" placeholder="parent@example.com" />
+                <button id="saveRecoveryEmail" class="btn btn-outline" style="margin-top:8px">保存备用邮箱</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="scenario-title">邮件发送设置（可选）</div>
+              <div class="scenario-lead">不填也能用：演示模式会在软件内直接弹出验证码。想真发邮件，填 QQ/新浪 的 SMTP（用邮箱授权码，不是登录密码）。</div>
+              <div class="row wrap">
+                <button class="btn btn-outline btn-sm" data-mail="qq">QQ 邮箱</button>
+                <button class="btn btn-outline btn-sm" data-mail="sina">新浪邮箱</button>
+                <button class="btn btn-outline btn-sm" data-mail="163">163 邮箱</button>
+              </div>
+              <div class="field-label" style="margin-top:10px">SMTP 服务器</div>
+              <div class="row">
+                <input id="smtpHost" class="input grow" placeholder="smtp.qq.com" />
+                <input id="smtpPort" class="input" style="width:76px" inputmode="numeric" placeholder="587" />
+              </div>
+              <label class="check" style="margin-top:10px"><input type="checkbox" id="smtpSsl"><span>使用 SSL/TLS 加密</span></label>
+              <div class="field-label" style="margin-top:12px">邮箱账号</div>
+              <input id="smtpUser" class="input" style="width:100%" placeholder="你的邮箱" />
+              <div class="field-label" style="margin-top:12px">授权码（不是邮箱登录密码）</div>
+              <input type="password" id="smtpPass" class="input" style="width:100%" autocomplete="off" />
+              <button id="saveMail" class="btn btn-outline" style="margin-top:12px">保存邮件设置</button>
+              <div class="hint accent-hint" id="mailHint"></div>
+            </div>
+          </div>
+
+          <!-- 支撑配置：睡觉与护眼 -->
+          <div class="card" style="margin-top:16px">
+            <div class="scenario-title">睡觉与护眼</div>
+            <label class="check" style="margin-top:10px"><input type="checkbox" id="bedtime"><span>22:00 – 07:00 断网</span></label>
+            <div class="muted-note" style="margin-left:28px">守护期间到点就断网，帮助孩子按时睡觉。</div>
+
+            <div class="h-divider"></div>
+
+            <div class="card-title">护眼休息提醒</div>
+            <div class="muted-note">孩子连续用电脑到设定时长，就弹窗温柔提醒休息眼睛。只是提醒，不会强制关掉软件。</div>
+            <div class="row wrap" style="margin-top:10px">
+              <button class="pill-btn break-pill" data-break="0">关闭</button>
+              <button class="pill-btn break-pill" data-break="30">每 30 分钟</button>
+              <button class="pill-btn break-pill" data-break="45">每 45 分钟</button>
+              <button class="pill-btn break-pill" data-break="60">每 60 分钟</button>
+            </div>
+          </div>
+
+          <div class="hint accent-hint" id="parentHint" style="margin-top:14px"></div>
+        </section>
+
+        <!-- ===== 使用统计 ===== -->
+        <section id="page-stats" class="page">
+          <div class="settings-head">
+            <div class="settings-head-text">
+              <div class="page-title">使用统计</div>
+              <div class="page-lead">每个软件每天用了多久，都记在这台电脑上，不会上传。</div>
+            </div>
+            <div class="row wrap">
+              <button class="pill-btn range-pill on" data-statrange="7">近 7 天</button>
+              <button class="pill-btn range-pill" data-statrange="14">近 14 天</button>
+              <button class="pill-btn range-pill" data-statrange="30">近 30 天</button>
+            </div>
+          </div>
+
+          <div class="stat-cards">
+            <div class="card stat-card"><div class="stat-label">累计时长</div><div class="stat-value" id="statTotal">—</div></div>
+            <div class="card stat-card"><div class="stat-label">日均时长</div><div class="stat-value" id="statAvg">—</div></div>
+            <div class="card stat-card"><div class="stat-label">用过的软件</div><div class="stat-value" id="statApps">—</div></div>
+            <div class="card stat-card"><div class="stat-label">拦截次数</div><div class="stat-value" id="statBlocked">—</div></div>
+          </div>
+
+          <div class="card stats-block">
+            <div class="card-title-row">
+              <div class="card-title">每天总时长</div>
+              <div class="card-aside">今天为实时数据</div>
+            </div>
+            <div class="stat-bars" id="statDailyBars"></div>
+            <div class="empty-note hidden" id="statDailyEmpty">还没有历史记录。守护跑起来、跨天之后，这里会一天一根柱子。</div>
+          </div>
+
+          <div class="card stats-block">
+            <div class="card-title-row">
+              <div class="card-title">应用时长排行</div>
+              <div class="card-aside">按所选范围合计</div>
+            </div>
+            <div id="statRanking"></div>
+            <div class="empty-note hidden" id="statRankEmpty">还没有记录。守护开始后，孩子用的每款软件都会记下来。</div>
+          </div>
+
+          <div class="card stats-block">
+            <div class="card-title">每日明细</div>
+            <div class="detail-row detail-head"><span>日期</span><span>总时长</span><span>拦截</span><span>用得最多的软件</span></div>
+            <div id="statDetail"></div>
+          </div>
+        </section>
+
+        <!-- ===== 帮助 ===== -->
+        <section id="page-help" class="page">
+          <div class="page-title">帮助与状态</div>
+          <div class="page-lead">确认守护引擎在正常工作，或试一下拦截效果。</div>
+
+          <div class="help-list">
+            <div class="card">
+              <div class="card-title">守护引擎</div>
+              <div class="help-engine" id="helpEngine"></div>
+            </div>
+            <div class="card">
+              <div class="card-title">验证拦截</div>
+              <div class="muted-note">开始后只留计算器，打开记事本应被自动关掉。用来确认拦截有没有生效。</div>
+              <button id="spikeBtn" class="btn btn-outline" style="margin-top:12px">试一下拦截</button>
+              <div class="hint accent-hint" id="spikeHint"></div>
+            </div>
+            <div class="card">
+              <div class="card-title">杀毒软件提示有风险？</div>
+              <div class="muted-note">澄时做的事（锁屏、关闭名单外的程序、常驻后台守护）和杀毒软件盯着的可疑行为长得一样，又没有花钱买代码签名证书，所以 Windows SmartScreen 或杀软可能弹「未知发布者」警告，属于误报。澄时全部代码开源、不联网上传任何数据；不放心的话可以只从官方发布页下载，或自己从源码构建后再安装。若杀软拦截了安装，把澄时加入白名单即可。</div>
+            </div>
+            <div class="card">
+              <div class="card-title">问题反馈</div>
+              <div class="muted-note">装不上、拦不住、误关了正常软件？先打开日志看看，反馈时把现象、日志和 Windows 版本一起发来，问题才好定位。</div>
+              <div class="row" style="margin-top:12px">
+                <button id="copyFeedback" class="btn btn-outline">复制邮箱</button>
+                <button id="openMailApp" class="btn btn-outline">打开邮件应用</button>
+                <button id="openLogs" class="btn btn-outline">打开日志文件夹</button>
+              </div>
+              <div class="feedback-email" id="feedbackEmail"></div>
+              <div class="hint accent-hint" id="feedbackHint"></div>
+            </div>
+            <div class="card">
+              <div class="card-title">关于</div>
+              <div class="muted-note" id="helpAbout">所有设置和记录都只存在这台电脑上，不会上传。</div>
+              <div class="row" style="margin-top:12px">
+                <button id="sponsorBtn" class="btn btn-outline"><svg class="ic ic-sm"><use href="#i-heart"/></svg> 支持澄时</button>
+                <span class="faint-note">澄时免费无广告，赞助全凭心意。</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- ================= 孩子视图：书桌场景 ================= -->
+    <div id="deskView" class="child-view hidden">
+      <div class="desk-glow g1"></div>
+      <div class="desk-glow g2"></div>
+      <div class="desk-center">
+        <div class="pill pill-accent">
+          <span class="pill-dot"></span><span id="childCaption">今天还剩</span>
+        </div>
+        <div class="remaining" id="remaining"></div>
+        <div class="child-hint" id="childHint"></div>
+        <div id="deskBanner" class="desk-banner hidden"></div>
+      </div>
+      <div class="desk-tiles" id="childTiles"></div>
+      <div class="desk-blocked chips warn-chips" id="childBlocked"></div>
+      <button id="askParentBtn" class="btn btn-outline btn-lg">找家长（改时间 / 软件 / 退出）</button>
+    </div>
+
+    <!-- ================= 孩子视图：时间用完夜晚场景 ================= -->
+    <div id="timeupView" class="child-view hidden">
+      <div class="stars">
+        <span style="left:8%;top:18%"></span><span style="left:22%;top:62%"></span><span style="left:38%;top:12%"></span>
+        <span style="left:55%;top:26%"></span><span style="left:71%;top:9%"></span><span style="left:84%;top:34%"></span>
+        <span style="left:92%;top:58%"></span><span style="left:14%;top:84%"></span><span style="left:64%;top:78%"></span>
+      </div>
+      <div class="night-center">
+        <svg class="night-art" viewBox="0 0 176 118" aria-hidden="true">
+          <path fill="#F5D9A0" d="M 78,6 A 50,50 0 1 0 78,106 A 64,64 0 0 1 78,6 Z"/>
+          <path fill="none" stroke="#C79A4B" stroke-width="2.4" stroke-linecap="round" d="M 30,48 Q 34,53 38,48 M 40,60 Q 44,65 48,60 M 34,72 Q 42,79 50,72"/>
+          <circle cx="136" cy="64" r="30" fill="#F4F3FB" stroke="#D9DCEF" stroke-width="3"/>
+          <circle cx="107" cy="34" r="8" fill="#D9DCEF"/><circle cx="165" cy="34" r="8" fill="#D9DCEF"/>
+          <path fill="none" stroke="#37325C" stroke-width="3" stroke-linecap="round" d="M 136,64 L 136,48 M 136,64 L 148,68"/>
+          <circle cx="136" cy="64" r="3.5" fill="#37325C"/>
+          <path fill="none" stroke="#D9DCEF" stroke-width="3" stroke-linecap="round" d="M 116,90 L 110,99 M 156,90 L 162,99"/>
+          <circle cx="170.5" cy="14.5" r="2.5" fill="#8B8FB8"/><circle cx="89.5" cy="15.5" r="1.5" fill="#8B8FB8"/>
+        </svg>
+        <div class="night-title">今天的时间用完啦</div>
+        <div class="night-hint" id="timeupHint"></div>
+        <button id="askMoreBtn" class="btn btn-primary btn-lg hidden">申请加时</button>
+        <div class="night-foot">加时只对今天有效，跨天自动清零 · 忘记密码可用找回码重置</div>
+        <button id="askParentNight" class="btn btn-ghost btn-night hidden">找家长（改时间 / 软件 / 退出）</button>
+      </div>
+      <div class="night-badge nb-left">
+        <svg class="ic ic-sm"><use href="#i-shield"/></svg><span>澄时守护中</span>
+      </div>
+      <div class="night-badge nb-right"><span class="moon-dot"></span><span>睡觉时段 22:00 – 07:00</span></div>
+    </div>
+
+    <!-- ================= 护眼休息提醒 ================= -->
+    <div id="breakOverlay" class="overlay hidden">
+      <div class="dialog">
+        <div class="dialog-icon"><svg class="ic-xl"><use href="#i-eye"/></svg></div>
+        <div class="dialog-title">该让眼睛休息一下啦</div>
+        <div class="dialog-text">你已经连续看了好一会儿屏幕。站起来走走，看看远处，5 分钟就好。</div>
+        <div class="row center">
+          <button class="btn btn-primary" data-break-dismiss="rest">好的，休息一下</button>
+          <button class="btn btn-outline" data-break-dismiss="more">再看一会儿</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

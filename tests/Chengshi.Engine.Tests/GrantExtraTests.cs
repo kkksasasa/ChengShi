@@ -114,7 +114,8 @@ public class GrantExtraTests : IDisposable
             usageLog: new UsageLogStore(LogPath));
 
         host.StartGuard();
-        clock.Advance(TimeSpan.FromMinutes(60));
+        // 62 分钟之后才真正超时：60 分钟额度 + 2 分钟「保存进度」宽限。
+        clock.Advance(TimeSpan.FromMinutes(63));
         Assert.Equal(SessionPhase.TimeUp, host.Snapshot.Phase);
         // 真实服务每秒都会 Tick 把「用满 60 分钟」落账；测试里手动补这一拍。
         host.Tick();
@@ -145,7 +146,7 @@ public class GrantExtraTests : IDisposable
             usageLog: new UsageLogStore(LogPath));
 
         host.StartGuard();
-        clock.Advance(TimeSpan.FromMinutes(60));
+        clock.Advance(TimeSpan.FromMinutes(63));
         Assert.Equal(SessionPhase.TimeUp, host.Snapshot.Phase);
         host.Tick();
         Assert.Equal(TimeSpan.FromMinutes(60), host.Budget.Used);

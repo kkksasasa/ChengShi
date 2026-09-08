@@ -18,6 +18,9 @@ public static class FileLog
     /// <summary>日志目录；未指定时用数据目录下的 logs。测试里可以指到临时目录。</summary>
     public static string? DirectoryOverride { get; set; }
 
+    /// <summary>界面「打开日志文件夹」用：与写日志的实际去向一致（含数据目录只读时的回退）。</summary>
+    public static string? CurrentDirectory => ResolveDirectory();
+
     public static void Write(string source, string message) =>
         Write(source, "INFO", message);
 

@@ -198,7 +198,8 @@ public sealed class NamedPipeSessionServer : IDisposable
                             start.DeskId,
                             TimeSpan.FromMinutes(Math.Max(1, start.DurationMinutes)),
                             start.Pinned,
-                            start.Pin);
+                            start.Pin,
+                            TimeSpan.FromMinutes(Math.Max(0, start.GraceMinutes)));
                         var hint = result.Status switch
                         {
                             StartSessionStatus.Started => "从现在起，只留这张书桌。",

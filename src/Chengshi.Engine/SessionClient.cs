@@ -171,10 +171,15 @@ public sealed class SessionClient : ISessionControl
         return new StartSessionResult(reply.Status, reply.Snapshot);
     }
 
-    public StartSessionResult Start(string deskId, TimeSpan duration, bool pinned, string? pin)
+    public StartSessionResult Start(string deskId, TimeSpan duration, bool pinned, string? pin, TimeSpan grace = default)
     {
         var reply = Request<StartReply>(
-            new StartSessionRequest(deskId, (int)Math.Max(1, duration.TotalMinutes), pinned, pin),
+            new StartSessionRequest(
+                deskId,
+                (int)Math.Max(1, duration.TotalMinutes),
+                pinned,
+                pin,
+                grace.TotalMinutes),
             TimeSpan.FromSeconds(5));
         ApplyState(reply.Snapshot);
         RefreshConfigQuietly();

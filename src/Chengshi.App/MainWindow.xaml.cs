@@ -1,31 +1,39 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Media;
-using System.Windows.Media.Animation;
-using System.Windows.Shapes;
 using System.Windows.Threading;
 using Chengshi.Core;
 using Chengshi.Engine;
 using Chengshi.Ipc;
+using Microsoft.Web.WebView2.Core;
 
 namespace Chengshi.App;
 
+/// <summary>
+/// 主窗口：WPF 只提供无边框外壳，全部界面由 wwwroot\ 下的网页经 WebView2 渲染。
+/// C# 侧持有守护引擎与配置（唯一事实来源），通过
+///   C# → JS：PostWebMessageAsJson({type, payload}) 推状态；
+///   JS → C#：postMessage({cmd, args})  发命令。
+/// 网页每秒收到一次 state/dashboard；表单按节推送（form.*），避免打字时整页重排。
+/// </summary>
 public partial class MainWindow : Window
 {
     private readonly ISessionControl _host;
     private readonly DispatcherTimer _timer;
     private readonly List<string> _blocked = [];
     private readonly string? _startupHint;
+    private const string FeedbackEmail = "sakz886@sina.com";
     private readonly UsageLogStore _usageLog = new();
     private DateTime _weekUsageNextRead = DateTime.MinValue;
     private int _weekdayMinutes = 60;
     private int _weekendMinutes = 120;
     private Dictionary<DayOfWeek, int>? _schedule;
-    private List<DayLimitRow> _dayRows = [];
     private readonly DayOfWeek[] _weekOrder =
     {
         DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday,
@@ -34,13 +42,38 @@ public partial class MainWindow : Window
     private bool _parentUnlocked;
     private string _recoveryEmail = string.Empty;
     private bool _exitAllowed;
-    private bool _ready;
-    private bool _refreshing;
-    private bool _dashboardAnimated;
     private DateTime _lastBreakTick = DateTime.Now;
     private TimeSpan _breakAccum;
     private DateTime _lastBreakShown = DateTime.MinValue;
     private int _breakReminderMinutes;
+
+    // ===== 家长表单的 C# 侧状态（网页只是它的视图） =====
+    private string _selectedDeskId = string.Empty;
+    private bool _weekendTabActive;
+    private bool _startWithWindows = true;
+    private bool _guardOnLaunch = true;
+    private bool _bedtime = true;
+    private string _mailHost = string.Empty;
+    private string _mailPort = string.Empty;
+    private bool _mailSsl = true;
+    private string _mailUser = string.Empty;
+
+    // 提示语（旧 XAML 里 ParentHint / DashboardHintText / SpikeHintText 的对应物）
+    private string _parentHint = string.Empty;
+    private string _dashHint = string.Empty;
+    private string _spikeHint = string.Empty;
+    private string _recoveryHint = "忘记密码时用，请抄下来或点「复制」存好。";
+    private string _childHintOverride = string.Empty;
+
+    // ===== 统计页 =====
+    private int _statsRangeDays = 7;
+
+    // ===== WebView =====
+    private bool _webReady;
+    private List<object>? _weekRowsCache;
+    private bool _weekEmptyCache = true;
+
+    private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
     internal AppTray? Tray { get; set; }
 
@@ -52,10 +85,21 @@ public partial class MainWindow : Window
         AppIcon.Apply(this);
         _host = host;
         _startupHint = startupHint;
-        ReloadDesks(_host.Family?.DeskId);
-        LoadDurationFromFamily();
-        LoadScheduleFromFamily();
-        RefreshParentForm();
+
+        var family = _host.Family;
+        _weekdayMinutes = family?.WeekdayMinutes ?? family?.DailyMinutes ?? 60;
+        _weekendMinutes = family?.WeekendMinutes ?? family?.DailyMinutes ?? 120;
+        _schedule = family?.Schedule is { } dict && dict.Count > 0
+            ? new Dictionary<DayOfWeek, int>(dict)
+            : null;
+        _startWithWindows = family?.StartWithWindows ?? true;
+        _guardOnLaunch = family?.GuardOnLaunch ?? true;
+        _bedtime = family?.BedtimeEnabled ?? true;
+        _breakReminderMinutes = family?.BreakReminderMinutes ?? 0;
+        _recoveryEmail = family?.RecoveryEmail ?? string.Empty;
+        _selectedDeskId = family?.DeskId
+            ?? _host.Desks.FirstOrDefault(d => d.Id is not BuiltinDesks.SpikeId and not BuiltinDesks.LockdownId)?.Id
+            ?? string.Empty;
 
         _host.ProcessBlocked += OnBlocked;
         _host.ConnectionChanged += OnConnectionChanged;
@@ -82,24 +126,292 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
-                ParentHint.Text = ex.Message;
+                _parentHint = ex.Message;
             }
         }
 
-        _ready = true;
-        if (_host.Family is { } family)
+        if (family is { } f)
         {
-            StartupRegistration.Apply(family.StartWithWindows);
+            StartupRegistration.Apply(f.StartWithWindows);
         }
 
-        ParentHint.Text = EngineHint(_startupHint);
-        Render(_host.Snapshot);
+        _dashHint = _startupHint ?? string.Empty;
+        _parentHint = EngineHint(_startupHint);
+
+        Loaded += async (_, _) => await InitWebAsync();
     }
 
-    private void Minimize_Click(object sender, RoutedEventArgs e) => HideToTray();
+    // ============================================================
+    // WebView 初始化与消息通道
+    // ============================================================
+    private async Task InitWebAsync()
+    {
+        try
+        {
+            var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+            var userData = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Chengshi", "WebView2");
+            var env = await CoreWebView2Environment.CreateAsync(null, userData);
+            await Web.EnsureCoreWebView2Async(env);
 
-    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+            var core = Web.CoreWebView2;
+            core.Settings.AreDefaultContextMenusEnabled = false;
+            core.Settings.AreDevToolsEnabled = false;
+            core.Settings.AreBrowserAcceleratorKeysEnabled = false;
+            core.Settings.IsStatusBarEnabled = false;
+            core.Settings.IsZoomControlEnabled = false;
+            core.Settings.IsNonClientRegionSupportEnabled = true;
+            core.SetVirtualHostNameToFolderMapping("chengshi.local", wwwroot, CoreWebView2HostResourceAccessKind.Allow);
+            core.WebMessageReceived += OnWebMessage;
+            core.ProcessFailed += (_, e) =>
+                FileLog.Error("app", "WebView2 进程异常退出。", new Exception(e.ProcessFailedKind.ToString()));
+            core.Navigate("https://chengshi.local/index.html");
+        }
+        catch (WebView2RuntimeNotFoundException ex)
+        {
+            FileLog.Error("app", "WebView2 运行时缺失。", ex);
+            var choice = System.Windows.MessageBox.Show(
+                "澄时的界面需要 Microsoft Edge WebView2 运行时（Win10/11 一般自带）。\n\n"
+                + "点「确定」打开官方下载页，安装完成后重新打开澄时即可。",
+                "澄时", MessageBoxButton.OKCancel, MessageBoxImage.Information);
+            if (choice == MessageBoxResult.OK)
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo("https://go.microsoft.com/fwlink/p/?LinkId=2124703")
+                    {
+                        UseShellExecute = true,
+                    });
+                }
+                catch (Exception ex2)
+                {
+                    FileLog.Error("app", "打开 WebView2 下载页失败。", ex2);
+                }
+            }
 
+            System.Windows.Application.Current?.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            FileLog.Error("app", "WebView2 初始化失败。", ex);
+            System.Windows.MessageBox.Show("界面加载失败：" + ex.Message, "澄时", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.Application.Current?.Shutdown();
+        }
+    }
+
+    private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            var cmd = root.TryGetProperty("cmd", out var c) && c.ValueKind == JsonValueKind.String
+                ? c.GetString()
+                : null;
+            var args = root.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object
+                ? a.Clone()
+                : (JsonElement?)null;
+            HandleCommand(cmd, args);
+        }
+        catch (Exception ex)
+        {
+            FileLog.Error("app", "网页命令处理失败。", ex);
+        }
+    }
+
+    /// <summary>向网页推一条消息。WebView 未就绪时静默丢弃（state 每秒都会补推）。</summary>
+    private void Push(string type, object? payload = null)
+    {
+        if (!_webReady)
+        {
+            return;
+        }
+
+        var envelope = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["type"] = type,
+            ["payload"] = payload,
+        }, JsonOpts);
+        Web.CoreWebView2.PostWebMessageAsJson(envelope);
+    }
+
+    private void PushHint(string slot, string text) => Push("hint", new { slot, text });
+
+    private void PushAll()
+    {
+        var snapshot = _host.Snapshot;
+        PushState(snapshot);
+        PushDashboard(snapshot);
+        PushFormAll();
+        PushHelp();
+    }
+
+    // ============================================================
+    // JS → C# 命令
+    // ============================================================
+    private void HandleCommand(string? cmd, JsonElement? args)
+    {
+        switch (cmd)
+        {
+            case null:
+                break;
+            case "ready":
+                _webReady = true;
+                PushAll();
+                break;
+            case "min":
+                HideToTray();
+                break;
+            case "close":
+                Close();
+                break;
+            case "dashboardGuard":
+                DashboardGuard();
+                break;
+            case "startGuard":
+                StartGuard(args);
+                break;
+            case "reward":
+                Reward();
+                break;
+            case "deskSelect":
+                SelectDesk(ArgStr(args, "id"));
+                break;
+            case "preset":
+                ApplyPreset(ArgStr(args, "desk"), ArgInt(args, "minutes"));
+                break;
+            case "addApps":
+                AddApps();
+                break;
+            case "removeApp":
+                RemoveApp(ArgStr(args, "key"));
+                break;
+            case "addAllowedSite":
+                AddAllowedSite(ArgStr(args, "text"));
+                break;
+            case "removeAllowedSite":
+                RemoveAllowedSite(ArgStr(args, "site"));
+                break;
+            case "addBlockedSite":
+                AddBlockedSite(ArgStr(args, "text"));
+                break;
+            case "removeBlockedSite":
+                RemoveBlockedSite(ArgStr(args, "site"));
+                break;
+            case "setCategories":
+                SetCategories(ArgBool(args, "video"), ArgBool(args, "games"), ArgBool(args, "adult"));
+                break;
+            case "dayTab":
+                _weekendTabActive = ArgStr(args, "tab") == "weekend";
+                PushFormDuration();
+                break;
+            case "setPresetDuration":
+                if (ArgStr(args, "minutes") == "custom")
+                {
+                    PushFormDuration();
+                }
+                else
+                {
+                    ActiveMinutes = ArgInt(args, "minutes");
+                    PushFormDuration();
+                    PersistFamilyIfConfigured();
+                }
+
+                break;
+            case "setCustomMinutes":
+                ActiveMinutes = Math.Clamp(ArgInt(args, "value", ActiveMinutes), 5, 600);
+                PushFormDuration();
+                PersistFamilyIfConfigured();
+                break;
+            case "setScheduleDay":
+                CommitDayMinutes(ArgInt(args, "day"), ArgInt(args, "minutes"));
+                break;
+            case "setFlag":
+                SetFlag(ArgStr(args, "name"), args);
+                break;
+            case "addAppLimit":
+                AddAppLimit(ArgStr(args, "key"), ArgInt(args, "minutes"));
+                break;
+            case "removeAppLimit":
+                RemoveAppLimit(ArgStr(args, "key"));
+                break;
+            case "changePin":
+                ChangePin(ArgStr(args, "old"), ArgStr(args, "new"), ArgStr(args, "confirm"));
+                break;
+            case "saveRecoveryEmail":
+                SaveRecoveryEmail(ArgStr(args, "email"));
+                break;
+            case "copyRecovery":
+                CopyRecovery();
+                break;
+            case "mailPreset":
+                MailPreset(ArgStr(args, "tag"));
+                break;
+            case "saveMail":
+                SaveMail(ArgStr(args, "host"), ArgStr(args, "port"), ArgBool(args, "ssl"),
+                    ArgStr(args, "user"), ArgStr(args, "pass"));
+                break;
+            case "installService":
+                InstallService();
+                break;
+            case "uninstallService":
+                UninstallService();
+                break;
+            case "statsShow":
+                PushStats();
+                break;
+            case "statsRange":
+                _statsRangeDays = ArgInt(args, "days") switch { 14 => 14, 30 => 30, _ => 7 };
+                PushStats();
+                break;
+            case "spike":
+                Spike();
+                break;
+            case "copyFeedback":
+                CopyFeedbackEmail();
+                break;
+            case "openMailApp":
+                OpenMailApp();
+                break;
+            case "openLogs":
+                OpenLogs();
+                break;
+            case "sponsor":
+                new SponsorWindow { Owner = this }.ShowDialog();
+                break;
+            case "askParent":
+                AskParent();
+                break;
+            case "askMore":
+                AskMore();
+                break;
+            case "breakDismiss":
+                DismissBreak();
+                break;
+        }
+    }
+
+    private static string ArgStr(JsonElement? args, string name, string def = "") =>
+        args.HasValue
+        && args.Value.TryGetProperty(name, out var v)
+        && v.ValueKind == JsonValueKind.String
+            ? v.GetString() ?? def
+            : def;
+
+    private static int ArgInt(JsonElement? args, string name, int def = 0) =>
+        args.HasValue && args.Value.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
+            ? v.GetInt32()
+            : def;
+
+    private static bool ArgBool(JsonElement? args, string name) =>
+        args.HasValue && args.Value.TryGetProperty(name, out var v)
+        && (v.ValueKind == JsonValueKind.True
+            || (v.ValueKind == JsonValueKind.String && bool.TryParse(v.GetString(), out var b) && b));
+
+    // ============================================================
+    // 窗口 / 托盘 / 退出
+    // ============================================================
     internal void HideToTray(bool silent = false)
     {
         WindowState = WindowState.Normal;
@@ -173,16 +485,20 @@ public partial class MainWindow : Window
     {
         Dispatcher.Invoke(() =>
         {
+            var child = _host.Snapshot.Phase is SessionPhase.InDesk or SessionPhase.TimeUp;
             if (connected)
             {
-                ParentHint.Text = EngineHint(null);
-                DashboardHintText.Text = EngineHint(null);
+                _parentHint = EngineHint(null);
+                _dashHint = EngineHint(null);
             }
-            else if (ChildRoot.Visibility != Visibility.Visible)
+            else if (!child)
             {
-                ParentHint.Text = "守护服务连接中断，正在重连…（已开的守护仍由服务执行）";
-                DashboardHintText.Text = "守护服务连接中断，正在重连…（已开的守护仍由服务执行）";
+                _parentHint = "守护服务连接中断，正在重连…（已开的守护仍由服务执行）";
+                _dashHint = _parentHint;
             }
+
+            PushHint("parent", _parentHint);
+            PushHint("dashHint", _dashHint);
         });
     }
 
@@ -207,6 +523,30 @@ public partial class MainWindow : Window
         return string.Join(" ", parts);
     }
 
+    private string EngineDetailText()
+    {
+        var lines = new List<string>
+        {
+            _host.IsRemote
+                ? "守护服务已连接：以系统权限执行，孩子关不掉。"
+                : "本机守护模式：断网和防强杀没启用，安装并启动澄时服务后自动升级。",
+        };
+        if (!string.IsNullOrWhiteSpace(_host.EtwHint))
+        {
+            lines.Add(_host.EtwHint);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_host.GuardHint))
+        {
+            lines.Add(_host.GuardHint);
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    // ============================================================
+    // 心跳：每秒推一次状态
+    // ============================================================
     private void OnTick(object? sender, EventArgs e)
     {
         SessionSnapshot snapshot;
@@ -222,7 +562,9 @@ public partial class MainWindow : Window
         }
 
         AccumulateBreak(snapshot);
-        Render(snapshot);
+        _childHintOverride = string.Empty;
+        PushState(snapshot);
+        PushDashboard(snapshot);
     }
 
     /// <summary>守护中累计连续用机时长，到「护眼休息」间隔就弹一次温柔提醒（不强制）。</summary>
@@ -242,158 +584,75 @@ public partial class MainWindow : Window
         var interval = TimeSpan.FromMinutes(_breakReminderMinutes);
         if (_breakAccum >= interval && (now - _lastBreakShown) >= interval)
         {
-            ShowBreakOverlay();
+            Push("overlay", new { name = "break", visible = true });
             _breakAccum = TimeSpan.Zero;
             _lastBreakShown = now;
         }
     }
 
-    private void ShowBreakOverlay()
+    private void DismissBreak()
     {
-        if (BreakOverlay.Visibility == Visibility.Visible)
-        {
-            return;
-        }
-
-        BreakOverlay.Visibility = Visibility.Visible;
-        Fade(BreakOverlay, 0, 1, null);
-    }
-
-    private void BreakDismiss_Click(object sender, RoutedEventArgs e)
-    {
-        BreakOverlay.Visibility = Visibility.Collapsed;
+        Push("overlay", new { name = "break", visible = false });
         _breakAccum = TimeSpan.Zero;
         _lastBreakShown = DateTime.Now;
     }
 
-    private void BreakReminder_Changed(object sender, RoutedEventArgs e)
-    {
-        if (!_ready || _refreshing || sender is not RadioButton { Tag: string tag })
-        {
-            return;
-        }
-
-        _breakReminderMinutes = int.TryParse(tag, out var minutes) ? minutes : 0;
-        _breakAccum = TimeSpan.Zero;
-        PersistFamilyIfConfigured();
-    }
-
-    private void Reward_Click(object sender, RoutedEventArgs e)
-    {
-        if (!TryParentPin("输入家长密码，给孩子奖励 15 分钟屏幕时间。", out var pin))
-        {
-            return;
-        }
-
-        try
-        {
-            var result = _host.GrantExtra(pin, 15);
-            DashboardHintText.Text = result.Ok ? "已奖励 15 分钟，孩子继续玩吧。" : result.Hint;
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or RemoteFaultException)
-        {
-            DashboardHintText.Text = ex.Message;
-        }
-    }
-
     internal void ReloadAll()
     {
-        ReloadDesks(_host.Family?.DeskId);
-        LoadDurationFromFamily();
-        LoadScheduleFromFamily();
-        RefreshParentForm();
-        RefreshServiceStatus();
-        Render(_host.Snapshot);
+        var family = _host.Family;
+        _weekdayMinutes = family?.WeekdayMinutes ?? family?.DailyMinutes ?? 60;
+        _weekendMinutes = family?.WeekendMinutes ?? family?.DailyMinutes ?? 120;
+        _schedule = family?.Schedule is { } dict && dict.Count > 0
+            ? new Dictionary<DayOfWeek, int>(dict)
+            : null;
+        _startWithWindows = family?.StartWithWindows ?? true;
+        _guardOnLaunch = family?.GuardOnLaunch ?? true;
+        _bedtime = family?.BedtimeEnabled ?? true;
+        _breakReminderMinutes = family?.BreakReminderMinutes ?? 0;
+        _recoveryEmail = family?.RecoveryEmail ?? string.Empty;
+        _selectedDeskId = family?.DeskId ?? _selectedDeskId;
+        PushAll();
     }
 
-    private void DeskList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    // ============================================================
+    // 书桌 / 时长 / 周计划
+    // ============================================================
+    private Desk? SelectedDesk =>
+        (string.IsNullOrEmpty(_selectedDeskId) ? null : _host.FindDesk(_selectedDeskId))
+        ?? _host.Desks.FirstOrDefault(d => d.Id is not BuiltinDesks.SpikeId and not BuiltinDesks.LockdownId);
+
+    private void SelectDesk(string id)
     {
-        if (!_ready)
+        if (string.IsNullOrEmpty(id) || _host.FindDesk(id) is null)
         {
             return;
         }
 
-        RefreshParentForm();
+        _selectedDeskId = id;
+        PushFormDesk();
+        PushFormDuration();
+        PushFormLimits();
         PersistFamilyIfConfigured();
     }
 
-    private void Duration_Checked(object sender, RoutedEventArgs e)
+    private void ApplyPreset(string deskId, int minutes)
     {
-        if (sender is not RadioButton { Tag: string tag })
+        var desk = _host.Desks.FirstOrDefault(d =>
+            string.Equals(d.Id, deskId, StringComparison.OrdinalIgnoreCase));
+        if (desk is null)
         {
             return;
         }
 
-        if (tag == "custom")
-        {
-            CustomMinutesPanel.Visibility = Visibility.Visible;
-            if (!_ready)
-            {
-                return;
-            }
-
-            CustomMinutesBox.Focus();
-            CustomMinutesBox.SelectAll();
-            RefreshDurationTexts();
-            return;
-        }
-
-        if (int.TryParse(tag, out var minutes))
-        {
-            ActiveMinutes = minutes;
-            CustomMinutesPanel.Visibility = Visibility.Collapsed;
-            if (!_ready)
-            {
-                return;
-            }
-
-            RefreshDurationTexts();
-            PersistFamilyIfConfigured();
-        }
-    }
-
-    private void CustomMinutes_LostFocus(object sender, RoutedEventArgs e) => CommitCustomMinutes();
-
-    private void CustomMinutes_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
-    {
-        if (e.Key == System.Windows.Input.Key.Enter)
-        {
-            CommitCustomMinutes();
-            e.Handled = true;
-        }
-    }
-
-    private void CommitCustomMinutes()
-    {
-        if (!int.TryParse(CustomMinutesBox.Text.Trim(), out var minutes))
-        {
-            RefreshDurationTexts();
-            return;
-        }
-
-        minutes = Math.Clamp(minutes, 5, 600);
-        if (CustomMinutesBox.Text.Trim() != minutes.ToString())
-        {
-            CustomMinutesBox.Text = minutes.ToString();
-        }
-
+        _selectedDeskId = desk.Id;
         ActiveMinutes = minutes;
-        RefreshDurationTexts();
+        PushFormDesk();
+        PushFormDuration();
+        PushFormLimits();
         PersistFamilyIfConfigured();
     }
 
-    private void ReloadDesks(string? selectId = null)
-    {
-        var id = selectId ?? (DeskList.SelectedItem as Desk)?.Id ?? _host.Family?.DeskId;
-        var desks = _host.Desks
-            .Where(d => d.Id is not BuiltinDesks.SpikeId and not BuiltinDesks.LockdownId)
-            .ToList();
-        DeskList.ItemsSource = desks;
-        DeskList.SelectedItem = desks.FirstOrDefault(d => d.Id == id) ?? desks.FirstOrDefault();
-        RefreshParentForm();
-    }
-
-    private bool WeekendTabActive => DayTabWeekend.IsChecked == true;
+    private bool WeekendTabActive => _weekendTabActive;
 
     private int ActiveMinutes
     {
@@ -411,134 +670,24 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>从已保存的家长设置恢复两档时长（旧配置只有统一档时按原值平移）。</summary>
-    private void LoadDurationFromFamily()
+    private void CommitDayMinutes(int dayIndex, int minutes)
     {
-        var family = _host.Family;
-        _weekdayMinutes = family?.WeekdayMinutes ?? family?.DailyMinutes ?? 60;
-        _weekendMinutes = family?.WeekendMinutes ?? family?.DailyMinutes ?? 120;
-        ApplyDurationEditor();
-    }
-
-    private void ApplyDurationEditor()
-    {
-        var minutes = ActiveMinutes;
-        var preset = minutes is 30 or 60 or 90 or 120;
-        Dur30.IsChecked = minutes == 30;
-        Dur60.IsChecked = minutes == 60;
-        Dur90.IsChecked = minutes == 90;
-        Dur120.IsChecked = minutes == 120;
-        DurCustom.IsChecked = !preset;
-        CustomMinutesPanel.Visibility = preset ? Visibility.Collapsed : Visibility.Visible;
-        if (!preset)
-        {
-            CustomMinutesBox.Text = minutes.ToString();
-        }
-
-        RefreshDurationTexts();
-    }
-
-    private void RefreshDurationTexts()
-    {
-        DailyMinutesText.Text = DescribeMinutes(ActiveMinutes);
-        OtherDaysText.Text = WeekendTabActive
-            ? $"周中每天 {DescribeMinutes(_weekdayMinutes)}"
-            : $"周末每天 {DescribeMinutes(_weekendMinutes)}";
-    }
-
-    private static string DescribeMinutes(int minutes) => minutes switch
-    {
-        30 => "30 分钟",
-        60 => "1 小时",
-        90 => "90 分钟",
-        120 => "2 小时",
-        _ => $"{minutes} 分钟",
-    };
-
-    private void DayType_Checked(object sender, RoutedEventArgs e)
-    {
-        if (!_ready || _refreshing)
+        if (dayIndex < 0 || dayIndex >= _weekOrder.Length)
         {
             return;
         }
 
-        ApplyDurationEditor();
-    }
-
-    /// <summary>从已保存设置恢复「按星期排」的单独时长；没有则为 null，回落到基础时长。</summary>
-    private void LoadScheduleFromFamily()
-    {
-        _schedule = _host.Family?.Schedule is { } dict && dict.Count > 0
-            ? new Dictionary<DayOfWeek, int>(dict)
-            : null;
-        RefreshScheduleEditor();
-    }
-
-    /// <summary>把 7 天卡片重画一遍：有单独设置的显示自定义值，否则跟随基础时长。</summary>
-    private void RefreshScheduleEditor()
-    {
-        _dayRows = _weekOrder.Select(day =>
-        {
-            if (_schedule is not null && _schedule.TryGetValue(day, out var custom))
-            {
-                return new DayLimitRow(day, DayLabel(day), custom, true);
-            }
-
-            var baseMin = day is DayOfWeek.Saturday or DayOfWeek.Sunday
-                ? _weekendMinutes
-                : _weekdayMinutes;
-            return new DayLimitRow(day, DayLabel(day), baseMin, false);
-        }).ToList();
-        DayScheduleList.ItemsSource = _dayRows;
-    }
-
-    private void DayMinutes_LostFocus(object sender, RoutedEventArgs e)
-    {
-        if (sender is TextBox box)
-        {
-            CommitDayMinutes(box);
-        }
-    }
-
-    private void DayMinutes_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
-    {
-        if (e.Key == System.Windows.Input.Key.Enter && sender is TextBox box)
-        {
-            CommitDayMinutes(box);
-            e.Handled = true;
-        }
-    }
-
-    private void CommitDayMinutes(TextBox box)
-    {
-        if (box.DataContext is not DayLimitRow row)
-        {
-            return;
-        }
-
-        if (!int.TryParse(box.Text.Trim(), out var minutes))
-        {
-            RefreshScheduleEditor();
-            return;
-        }
-
+        var day = _weekOrder[dayIndex];
         minutes = Math.Clamp(minutes, 5, 600);
-        if (box.Text.Trim() != minutes.ToString())
-        {
-            box.Text = minutes.ToString();
-        }
-
-        var baseMin = row.Day is DayOfWeek.Saturday or DayOfWeek.Sunday
-            ? _weekendMinutes
-            : _weekdayMinutes;
+        var baseMin = day is DayOfWeek.Saturday or DayOfWeek.Sunday ? _weekendMinutes : _weekdayMinutes;
         _schedule ??= new Dictionary<DayOfWeek, int>();
         if (minutes == baseMin)
         {
-            _schedule.Remove(row.Day);
+            _schedule.Remove(day);
         }
         else
         {
-            _schedule[row.Day] = minutes;
+            _schedule[day] = minutes;
         }
 
         if (_schedule.Count == 0)
@@ -548,12 +697,20 @@ public partial class MainWindow : Window
 
         if (!EnsureParentUnlocked())
         {
-            LoadScheduleFromFamily();
+            ReloadScheduleFromFamily();
             return;
         }
 
         PersistSchedule();
-        RefreshScheduleEditor();
+        PushFormSchedule();
+    }
+
+    private void ReloadScheduleFromFamily()
+    {
+        _schedule = _host.Family?.Schedule is { } dict && dict.Count > 0
+            ? new Dictionary<DayOfWeek, int>(dict)
+            : null;
+        PushFormSchedule();
     }
 
     private void PersistSchedule()
@@ -573,121 +730,9 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is RemoteFaultException or UnauthorizedAccessException or IOException)
         {
-            ParentHint.Text = "周计划没有保存：" + ex.Message;
+            _parentHint = "周计划没有保存：" + ex.Message;
+            PushHint("parent", _parentHint);
         }
-    }
-
-    private void RefreshParentForm()
-    {
-        var configured = _host.IsConfigured;
-        FirstRunPinPanel.Visibility = configured ? Visibility.Collapsed : Visibility.Visible;
-        ConfiguredPinPanel.Visibility = configured ? Visibility.Visible : Visibility.Collapsed;
-        ParentTitle.Text = configured ? "家长设置" : "给孩子设屏幕时间和软件";
-        ParentLead.Text = configured
-            ? "改时长或软件后点开始守护。孩子在守护画面里改不了。"
-            : "开始守护后，不在名单里的软件会被关掉；今天的时间用完就只剩系统桌面。";
-        RefreshDurationTexts();
-
-        if (DeskList.SelectedItem is not Desk desk)
-        {
-            return;
-        }
-
-        var names = desk.Apps
-            .Select(a => a.DisplayName)
-            .Distinct(StringComparer.CurrentCultureIgnoreCase)
-            .ToArray();
-        var empty = names.Length == 0;
-        AppChips.ItemsSource = desk.Apps;
-        AppChips.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
-        EmptyAppsText.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
-        GuardButton.Content = "开始守护";
-        GuardButton.IsEnabled = !empty;
-        RecoveryCodeText.Text = _host.IsRemote
-            ? "找回码已由守护服务保管（不再显示，请用首次设置时抄下的那枚）"
-            : _host.Family?.RecoveryCode ?? "进入设置后自动生成";
-        _recoveryEmail = _host.Family?.RecoveryEmail ?? string.Empty;
-        if (RecoveryEmailBox.Text != _recoveryEmail)
-        {
-            RecoveryEmailBox.Text = _recoveryEmail;
-        }
-        var startWithWindows = _host.Family?.StartWithWindows ?? true;
-        if (StartWithWindowsBox.IsChecked != startWithWindows)
-        {
-            StartWithWindowsBox.IsChecked = startWithWindows;
-        }
-
-        _refreshing = true;
-        try
-        {
-            AllowedSitesChips.ItemsSource = desk.AllowedSiteList.ToList();
-            BlockedSitesChips.ItemsSource = desk.BlockedSiteList.ToList();
-            SiteAllowEmpty.Visibility = desk.AllowedSiteList.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            CatVideo.IsChecked = desk.BlockCategoryList.Contains("video", StringComparer.OrdinalIgnoreCase);
-            CatGames.IsChecked = desk.BlockCategoryList.Contains("games", StringComparer.OrdinalIgnoreCase);
-            CatAdult.IsChecked = desk.BlockCategoryList.Contains("adult", StringComparer.OrdinalIgnoreCase);
-            SitesHintText.Text = desk.AllowedSiteList.Count > 0
-                ? "已开启白名单模式：浏览器只能打开上面这些网站。"
-                : "浏览器（Chrome / Edge）里，勾选的类别和禁止的网站会被拦掉，写作业时还可整机断网。";
-            var bedtime = _host.Family?.BedtimeEnabled ?? true;
-            if (BedtimeBox.IsChecked != bedtime)
-            {
-                BedtimeBox.IsChecked = bedtime;
-            }
-
-            var guardOnLaunch = _host.Family?.GuardOnLaunch ?? true;
-            if (GuardOnLaunchBox.IsChecked != guardOnLaunch)
-            {
-                GuardOnLaunchBox.IsChecked = guardOnLaunch;
-            }
-
-            _breakReminderMinutes = _host.Family?.BreakReminderMinutes ?? 0;
-            BreakOff.IsChecked = _breakReminderMinutes == 0;
-            Break30.IsChecked = _breakReminderMinutes == 30;
-            Break45.IsChecked = _breakReminderMinutes == 45;
-            Break60.IsChecked = _breakReminderMinutes == 60;
-        }
-        finally
-        {
-            _refreshing = false;
-        }
-
-        RefreshAppLimits();
-        RefreshScheduleEditor();
-
-        WhatHappensText.Text = empty
-            ? "先加一款软件，否则孩子几乎什么都开不了。"
-            : "用完后，名单外的软件会被关掉，直到明天或输入家长密码。";
-    }
-
-    private void StartWithWindows_Changed(object sender, RoutedEventArgs e)
-    {
-        if (!_ready)
-        {
-            return;
-        }
-
-        PersistFamilyIfConfigured();
-    }
-
-    private void Bedtime_Changed(object sender, RoutedEventArgs e)
-    {
-        if (!_ready || _refreshing)
-        {
-            return;
-        }
-
-        PersistFamilyIfConfigured();
-    }
-
-    private void GuardOnLaunch_Changed(object sender, RoutedEventArgs e)
-    {
-        if (!_ready || _refreshing)
-        {
-            return;
-        }
-
-        PersistFamilyIfConfigured();
     }
 
     /// <summary>
@@ -717,7 +762,8 @@ public partial class MainWindow : Window
 
         if (!_parentUnlocked)
         {
-            ParentHint.Text = "密码不对，设置没有解锁。";
+            _parentHint = "密码不对，设置没有解锁。";
+            PushHint("parent", _parentHint);
         }
 
         return _parentUnlocked;
@@ -725,19 +771,17 @@ public partial class MainWindow : Window
 
     private void PersistFamilyIfConfigured()
     {
-        if (_host.Family is not { } family || DeskList.SelectedItem is not Desk desk)
+        if (_host.Family is not { } family || SelectedDesk is not { } desk)
         {
             return;
         }
 
         if (!EnsureParentUnlocked())
         {
-            RefreshDurationTexts();
             LoadDurationFromFamily();
             return;
         }
 
-        var startWithWindows = StartWithWindowsBox.IsChecked == true;
         try
         {
             _host.SaveFamily(family with
@@ -746,9 +790,9 @@ public partial class MainWindow : Window
                 WeekdayMinutes = _weekdayMinutes,
                 WeekendMinutes = _weekendMinutes,
                 DeskId = desk.Id,
-                StartWithWindows = startWithWindows,
-                GuardOnLaunch = GuardOnLaunchBox.IsChecked == true,
-                BedtimeEnabled = BedtimeBox.IsChecked == true,
+                StartWithWindows = _startWithWindows,
+                GuardOnLaunch = _guardOnLaunch,
+                BedtimeEnabled = _bedtime,
                 BreakReminderMinutes = _breakReminderMinutes,
                 Schedule = _schedule,
                 RecoveryEmail = string.IsNullOrWhiteSpace(_recoveryEmail) ? null : _recoveryEmail,
@@ -761,441 +805,75 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is RemoteFaultException or UnauthorizedAccessException or IOException)
         {
-            ParentHint.Text = "设置没有保存：" + ex.Message;
+            _parentHint = "设置没有保存：" + ex.Message;
+            PushHint("parent", _parentHint);
             LoadDurationFromFamily();
             return;
         }
 
-        StartupRegistration.Apply(startWithWindows);
+        StartupRegistration.Apply(_startWithWindows);
     }
 
-    private void SaveRecoveryEmail_Click(object sender, RoutedEventArgs e)
+    private void LoadDurationFromFamily()
     {
-        var email = RecoveryEmailBox.Text.Trim();
-        if (email.Length > 0 && (!email.Contains('@') || !email.Contains('.')))
-        {
-            MailHint.Text = "邮箱格式看起来不太对，请检查。";
-            return;
-        }
-
-        _recoveryEmail = email;
-        if (!EnsureParentUnlocked())
-        {
-            MailHint.Text = "请先在弹出的密码框里验证家长密码。";
-            LoadDurationFromFamily();
-            return;
-        }
-
-        PersistFamilyIfConfigured();
-        MailHint.Text = string.IsNullOrWhiteSpace(email)
-            ? "已清除备用邮箱。"
-            : $"已保存备用邮箱：{email}（忘记密码时可用它收验证码）。";
+        var family = _host.Family;
+        _weekdayMinutes = family?.WeekdayMinutes ?? family?.DailyMinutes ?? 60;
+        _weekendMinutes = family?.WeekendMinutes ?? family?.DailyMinutes ?? 120;
+        PushFormDuration();
     }
 
-    private void RefreshServiceStatus()
+    private void SetFlag(string name, JsonElement? args)
     {
-        if (ServiceStatusText is null)
+        switch (name)
         {
-            return;
-        }
-
-        if (ServiceControl.IsInstalled())
-        {
-            ServiceStatusText.Text = ServiceControl.IsRunning()
-                ? "守护服务已安装并在运行：开机自动守护已生效，进程孩子杀不掉。"
-                : "守护服务已安装但未运行：点「重新安装/启动」会重启它。";
-            InstallServiceButton.Content = "重新安装/启动";
-            UninstallServiceButton.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            ServiceStatusText.Text = "尚未安装守护服务：现在只在软件运行时守护，重启电脑后不自动生效。建议点「安装守护服务」。";
-            InstallServiceButton.Content = "安装守护服务";
-            UninstallServiceButton.Visibility = Visibility.Collapsed;
-        }
-    }
-
-    private void InstallService_Click(object sender, RoutedEventArgs e)
-    {
-        if (!ServiceControl.IsAdministrator())
-        {
-            try
-            {
-                ServiceControl.RunElevated("--install-service");
-                ScheduleServiceStatusRefresh();
-            }
-            catch (Exception ex)
-            {
-                System.Windows.MessageBox.Show("提权失败：" + ex.Message, "澄时");
-            }
-
-            return;
-        }
-
-        try
-        {
-            ServiceControl.Install();
-            RefreshServiceStatus();
-            System.Windows.MessageBox.Show("守护服务已安装并启动。", "澄时");
-        }
-        catch (Exception ex)
-        {
-            System.Windows.MessageBox.Show("安装失败：" + ex.Message, "澄时");
-        }
-    }
-
-    private void UninstallService_Click(object sender, RoutedEventArgs e)
-    {
-        if (!ServiceControl.IsAdministrator())
-        {
-            try
-            {
-                ServiceControl.RunElevated("--uninstall-service");
-                ScheduleServiceStatusRefresh();
-            }
-            catch (Exception ex)
-            {
-                System.Windows.MessageBox.Show("提权失败：" + ex.Message, "澄时");
-            }
-
-            return;
-        }
-
-        try
-        {
-            ServiceControl.Uninstall();
-            RefreshServiceStatus();
-            System.Windows.MessageBox.Show("守护服务已卸载。", "澄时");
-        }
-        catch (Exception ex)
-        {
-            System.Windows.MessageBox.Show("卸载失败：" + ex.Message, "澄时");
-        }
-    }
-
-    private void ScheduleServiceStatusRefresh()
-    {
-        _ = Task.Delay(3000).ContinueWith(_ =>
-        {
-            try
-            {
-                Dispatcher.Invoke(RefreshServiceStatus);
-            }
-            catch
-            {
-                // 窗口已关闭等情况忽略。
-            }
-        }, TaskScheduler.Default);
-    }
-
-    private void MailPreset_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button { Tag: string tag })
-        {
-            return;
-        }
-
-        var preset = SmtpConfig.Preset(tag);
-        if (preset is null)
-        {
-            return;
-        }
-
-        SmtpHostBox.Text = preset.Host;
-        SmtpPortBox.Text = preset.Port.ToString();
-        SmtpSslBox.IsChecked = preset.UseSsl;        MailHint.Text = $"已填入 {tag.ToUpperInvariant()} 的服务器与端口，请补全邮箱账号和授权码。";
-    }
-
-    private async void SaveMail_Click(object sender, RoutedEventArgs e)
-    {
-        var host = SmtpHostBox.Text.Trim();
-        var user = SmtpUserBox.Text.Trim();
-        var pass = SmtpPassBox.Password;
-        int.TryParse(SmtpPortBox.Text.Trim(), out var port);
-
-        if (string.IsNullOrWhiteSpace(host) && string.IsNullOrWhiteSpace(user) && string.IsNullOrWhiteSpace(pass))
-        {
-            // 三项全空 = 清除邮件设置。
-            try
-            {
-                await _host.SaveSmtpAsync(new SmtpConfig(string.Empty, 0, false, string.Empty, string.Empty));
-                MailHint.Text = "已清除邮件设置。邮箱找回密码在配置好 SMTP 之前不可用。";
-            }
-            catch (Exception ex) when (ex is RemoteFaultException or InvalidOperationException)
-            {
-                MailHint.Text = "清除失败：" + ex.Message;
-            }
-
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(user))
-        {
-            MailHint.Text = "服务器和账号要一起填；授权码留空表示沿用已保存的。";
-            return;
-        }
-
-        try
-        {
-            // 授权码只发往守护服务（加密落盘），界面不保存、不再读取。
-            await _host.SaveSmtpAsync(new SmtpConfig(host, port, SmtpSslBox.IsChecked == true, user, pass));
-            MailHint.Text = "已保存邮件设置（授权码加密存放）。之后找回密码会真实发信到备用邮箱。";
-        }
-        catch (Exception ex) when (ex is RemoteFaultException or InvalidOperationException)
-        {
-            MailHint.Text = "保存失败：" + ex.Message;
-        }
-    }
-
-    private void AddAllowedSite_Click(object sender, RoutedEventArgs e)
-    {
-        if (DeskList.SelectedItem is not Desk desk)
-        {
-            return;
-        }
-
-        var normalized = Desk.NormalizeDomains([SiteAllowBox.Text]);
-        if (normalized.Count == 0)
-        {
-            ParentHint.Text = "网址格式不对，例如 ke.qq.com。";
-            return;
-        }
-
-        SiteAllowBox.Text = string.Empty;
-        ParentHint.Text = string.Empty;
-        SaveDesk(desk.WithAllowedSites(desk.AllowedSiteList.Append(normalized[0])));
-    }
-
-    private void RemoveAllowedSite_Click(object sender, RoutedEventArgs e)
-    {
-        if (DeskList.SelectedItem is not Desk desk)
-        {
-            return;
-        }
-
-        if ((sender as FrameworkElement)?.Tag is not string site)
-        {
-            return;
-        }
-
-        SaveDesk(desk.WithAllowedSites(desk.AllowedSiteList
-            .Where(s => !string.Equals(s, site, StringComparison.OrdinalIgnoreCase))));
-    }
-
-    private void AddBlockedSite_Click(object sender, RoutedEventArgs e)
-    {
-        if (DeskList.SelectedItem is not Desk desk)
-        {
-            return;
-        }
-
-        var normalized = Desk.NormalizeDomains([SiteBlockBox.Text]);
-        if (normalized.Count == 0)
-        {
-            ParentHint.Text = "网址格式不对，例如 youku.com。";
-            return;
-        }
-
-        SiteBlockBox.Text = string.Empty;
-        ParentHint.Text = string.Empty;
-        SaveDesk(desk.WithBlockedSites(desk.BlockedSiteList.Append(normalized[0])));
-    }
-
-    private void RemoveBlockedSite_Click(object sender, RoutedEventArgs e)
-    {
-        if (DeskList.SelectedItem is not Desk desk)
-        {
-            return;
-        }
-
-        if ((sender as FrameworkElement)?.Tag is not string site)
-        {
-            return;
-        }
-
-        SaveDesk(desk.WithBlockedSites(desk.BlockedSiteList
-            .Where(s => !string.Equals(s, site, StringComparison.OrdinalIgnoreCase))));
-    }
-
-    private void Category_Changed(object sender, RoutedEventArgs e)
-    {
-        if (!_ready || _refreshing || DeskList.SelectedItem is not Desk desk)
-        {
-            return;
-        }
-
-        var categories = new List<string>();
-        if (CatVideo.IsChecked == true)
-        {
-            categories.Add("video");
-        }
-
-        if (CatGames.IsChecked == true)
-        {
-            categories.Add("games");
-        }
-
-        if (CatAdult.IsChecked == true)
-        {
-            categories.Add("adult");
-        }
-
-        SaveDesk(desk.WithBlockCategories(categories));
-    }
-
-    private void ChangePin_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            if (PinHasher.NormalizePin(PinNewBox.Password) != PinHasher.NormalizePin(PinNewConfirmBox.Password))
-            {
-                PinChangeHint.Text = "两次新密码不一致。";
-                return;
-            }
-
-            var saved = _host.ChangePin(PinOldBox.Password, PinNewBox.Password);
-            _parentUnlocked = true;
-            PinOldBox.Clear();
-            PinNewBox.Clear();
-            PinNewConfirmBox.Clear();
-            // 改密码不动找回码；远程模式下服务不回传找回码，提醒家长沿用旧的那枚。
-            RecoveryCodeText.Text = saved.RecoveryCode ?? "找回码不变（沿用首次设置时抄下的那枚）";
-            PinChangeHint.Text = "密码已改。";
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or RemoteFaultException)
-        {
-            PinChangeHint.Text = ex.Message;
-        }
-    }
-
-    private void AddApps_Click(object sender, RoutedEventArgs e)
-    {
-        if (DeskList.SelectedItem is not Desk desk)
-        {
-            return;
-        }
-
-        var picker = new AppsWindow(desk.Apps) { Owner = this };
-        if (picker.ShowDialog() == true && picker.Result is not null)
-        {
-            SaveDesk(desk.WithApps(picker.Result));
-        }
-    }
-
-    private void Preset_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button { Tag: string tag })
-        {
-            return;
-        }
-
-        var parts = tag.Split('|');
-        if (parts.Length != 2 || !int.TryParse(parts[1], out var minutes))
-        {
-            return;
-        }
-
-        var desk = _host.Desks.FirstOrDefault(d =>
-            string.Equals(d.Id, parts[0], StringComparison.OrdinalIgnoreCase));
-        if (desk is null)
-        {
-            return;
-        }
-
-        DeskList.SelectedItem = desk;
-        SetMainDuration(minutes);
-        PersistFamilyIfConfigured();
-    }
-
-    private void SetMainDuration(int minutes)
-    {
-        switch (minutes)
-        {
-            case 30:
-                Dur30.IsChecked = true;
+            case "startWithWindows":
+                _startWithWindows = ArgBool(args, "value");
                 break;
-            case 60:
-                Dur60.IsChecked = true;
+            case "guardOnLaunch":
+                _guardOnLaunch = ArgBool(args, "value");
                 break;
-            case 90:
-                Dur90.IsChecked = true;
+            case "bedtime":
+                _bedtime = ArgBool(args, "value");
                 break;
-            case 120:
-                Dur120.IsChecked = true;
+            case "breakReminder":
+                _breakReminderMinutes = ArgInt(args, "value");
+                _breakAccum = TimeSpan.Zero;
                 break;
             default:
-                DurCustom.IsChecked = true;
-                CustomMinutesBox.Text = minutes.ToString();
-                CommitCustomMinutes();
-                break;
-        }
-    }
-
-    private void RemoveApp_Click(object sender, RoutedEventArgs e)
-    {
-        if (DeskList.SelectedItem is not Desk desk)
-        {
-            return;
-        }
-
-        if ((sender as FrameworkElement)?.Tag is not AllowedApp app)
-        {
-            return;
-        }
-
-        SaveDesk(desk.WithApps(desk.Apps.Where(a => a.Key != app.Key)));
-    }
-
-    private void SaveDesk(Desk desk)
-    {
-        if (!EnsureParentUnlocked())
-        {
-            return;
-        }
-
-        try
-        {
-            var saved = _host.SaveDesk(desk);
-            ReloadDesks(saved.Id);
-        }
-        catch (Exception ex) when (ex is RemoteFaultException or UnauthorizedAccessException or IOException)
-        {
-            ParentHint.Text = "书桌没有保存：" + ex.Message;
+                return;
         }
 
         PersistFamilyIfConfigured();
+        PushFormFlags();
     }
 
-    private void Spike_Click(object sender, RoutedEventArgs e)
+    // ============================================================
+    // 守护开始 / 停止 / 奖励
+    // ============================================================
+    private void DashboardGuard()
     {
-        if (_host.IsGuarding)
+        if (!_host.IsConfigured)
         {
-            SpikeHintText.Text = "正在守护孩子，不能同时试拦截。先找家长暂停。";
+            Push("nav", new { page = "settings" });
+            _parentHint = "先在这里设好家长密码和允许的软件，再回来开始守护。";
+            PushHint("parent", _parentHint);
             return;
         }
 
-        try
-        {
-            var result = _host.Start(BuiltinDesks.SpikeId, TimeSpan.FromMinutes(1), pinned: false, pin: null);
-            SpikeHintText.Text = EngineHint(null);
-            Render(result.Snapshot, "试拦截：只留计算器。打开记事本应被关掉。");
-        }
-        catch (Exception ex) when (ex is ArgumentException or RemoteFaultException)
-        {
-            SpikeHintText.Text = ex.Message;
-        }
+        StartGuard(null);
     }
 
-    private void Guard_Click(object sender, RoutedEventArgs e)
+    private void StartGuard(JsonElement? args)
     {
-        if (DeskList.SelectedItem is not Desk desk)
+        if (SelectedDesk is not { } desk)
         {
             return;
         }
 
-        if (desk.Apps.Count == 0)
+        if (desk.Apps.Count == 0 && !desk.Unrestricted)
         {
-            ParentHint.Text = "先添加至少一款允许使用的软件。";
+            _parentHint = "先添加至少一款允许使用的软件。";
+            PushHint("parent", _parentHint);
             return;
         }
 
@@ -1203,11 +881,12 @@ public partial class MainWindow : Window
         {
             if (!_host.IsConfigured)
             {
-                var pin = PinCreateBox.Password;
-                var confirm = PinConfirmBox.Password;
+                var pin = ArgStr(args, "pin");
+                var confirm = ArgStr(args, "confirm");
                 if (PinHasher.NormalizePin(pin) != PinHasher.NormalizePin(confirm))
                 {
-                    ParentHint.Text = "两次密码不一致。";
+                    _parentHint = "两次密码不一致。";
+                    PushHint("parent", _parentHint);
                     return;
                 }
 
@@ -1215,7 +894,7 @@ public partial class MainWindow : Window
                     pin, ActiveMinutes, desk.Id,
                     WeekdayMinutes: _weekdayMinutes, WeekendMinutes: _weekendMinutes) with
                 {
-                    StartWithWindows = StartWithWindowsBox.IsChecked == true,
+                    StartWithWindows = _startWithWindows,
                     Schedule = _schedule,
                 });
                 if (_host.IsRemote && _host.VerifyParentPin(pin))
@@ -1240,24 +919,38 @@ public partial class MainWindow : Window
             }
 
             var result = _host.StartGuard();
-            ParentHint.Text = EngineHint(null);
-            Render(result.Snapshot, ChildHintFor(result.Snapshot));
+            _parentHint = EngineHint(null);
+            _childHintOverride = ChildHintFor(result.Snapshot);
+            PushAll();
         }
-        catch (ArgumentException ex)
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or RemoteFaultException)
         {
-            ParentHint.Text = ex.Message;
-        }
-        catch (InvalidOperationException ex)
-        {
-            ParentHint.Text = ex.Message;
-        }
-        catch (RemoteFaultException ex)
-        {
-            ParentHint.Text = ex.Message;
+            _parentHint = ex.Message;
+            PushHint("parent", _parentHint);
         }
     }
 
-    private void AskParent_Click(object sender, RoutedEventArgs e)
+    private void Reward()
+    {
+        if (!TryParentPin("输入家长密码，给孩子奖励 15 分钟屏幕时间。", out var pin))
+        {
+            return;
+        }
+
+        try
+        {
+            var result = _host.GrantExtra(pin, 15);
+            _dashHint = result.Ok ? "已奖励 15 分钟，孩子继续玩吧。" : result.Hint;
+            PushHint("dashHint", _dashHint);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or RemoteFaultException)
+        {
+            _dashHint = ex.Message;
+            PushHint("dashHint", _dashHint);
+        }
+    }
+
+    private void AskParent()
     {
         if (!TryParentPin("输入家长密码后可以改每天时长、允许的软件，或暂时停下守护。", out var pin))
         {
@@ -1276,20 +969,21 @@ public partial class MainWindow : Window
             }
         }
 
-        var result = _host.Stop(pin);
-        ReloadDesks(_host.Family?.DeskId);
+        _host.Stop(pin);
+        _selectedDeskId = _host.Family?.DeskId ?? _selectedDeskId;
         LoadDurationFromFamily();
-        RefreshParentForm();
-        NavDashboard.IsChecked = true;
-        Render(result.Snapshot);
+        ReloadScheduleFromFamily();
+        Push("nav", new { page = "dashboard" });
+        PushAll();
     }
 
-    private void AskMore_Click(object sender, RoutedEventArgs e)
+    private void AskMore()
     {
         var dialog = new ExtendTimeWindow(_host) { Owner = this };
         if (dialog.ShowDialog() == true && dialog.Granted)
         {
-            Render(_host.Snapshot, "家长批了加时，继续吧。");
+            _childHintOverride = "家长批了加时，继续吧。";
+            PushState(_host.Snapshot);
         }
     }
 
@@ -1311,231 +1005,1171 @@ public partial class MainWindow : Window
         return true;
     }
 
+    // ============================================================
+    // 允许软件 / 网站规则 / 单软件限时
+    // ============================================================
+    private void AddApps()
+    {
+        if (SelectedDesk is not { } desk)
+        {
+            return;
+        }
+
+        var picker = new AppsWindow(desk.Apps) { Owner = this };
+        if (picker.ShowDialog() == true && picker.Result is not null)
+        {
+            SaveDesk(desk.WithApps(picker.Result));
+        }
+    }
+
+    private void RemoveApp(string key)
+    {
+        if (SelectedDesk is not { } desk || string.IsNullOrEmpty(key))
+        {
+            return;
+        }
+
+        SaveDesk(desk.WithApps(desk.Apps.Where(a => a.Key != key)));
+    }
+
+    private void AddAllowedSite(string text)
+    {
+        if (SelectedDesk is not { } desk)
+        {
+            return;
+        }
+
+        var normalized = Desk.NormalizeDomains([text]);
+        if (normalized.Count == 0)
+        {
+            _parentHint = "网址格式不对，例如 ke.qq.com。";
+            PushHint("parent", _parentHint);
+            return;
+        }
+
+        _parentHint = string.Empty;
+        PushHint("parent", string.Empty);
+        SaveDesk(desk.WithAllowedSites(desk.AllowedSiteList.Append(normalized[0])));
+    }
+
+    private void RemoveAllowedSite(string site)
+    {
+        if (SelectedDesk is not { } desk || string.IsNullOrEmpty(site))
+        {
+            return;
+        }
+
+        SaveDesk(desk.WithAllowedSites(desk.AllowedSiteList
+            .Where(s => !string.Equals(s, site, StringComparison.OrdinalIgnoreCase))));
+    }
+
+    private void AddBlockedSite(string text)
+    {
+        if (SelectedDesk is not { } desk)
+        {
+            return;
+        }
+
+        var normalized = Desk.NormalizeDomains([text]);
+        if (normalized.Count == 0)
+        {
+            _parentHint = "网址格式不对，例如 youku.com。";
+            PushHint("parent", _parentHint);
+            return;
+        }
+
+        _parentHint = string.Empty;
+        PushHint("parent", string.Empty);
+        SaveDesk(desk.WithBlockedSites(desk.BlockedSiteList.Append(normalized[0])));
+    }
+
+    private void RemoveBlockedSite(string site)
+    {
+        if (SelectedDesk is not { } desk || string.IsNullOrEmpty(site))
+        {
+            return;
+        }
+
+        SaveDesk(desk.WithBlockedSites(desk.BlockedSiteList
+            .Where(s => !string.Equals(s, site, StringComparison.OrdinalIgnoreCase))));
+    }
+
+    private void SetCategories(bool video, bool games, bool adult)
+    {
+        if (SelectedDesk is not { } desk)
+        {
+            return;
+        }
+
+        var categories = new List<string>();
+        if (video)
+        {
+            categories.Add("video");
+        }
+
+        if (games)
+        {
+            categories.Add("games");
+        }
+
+        if (adult)
+        {
+            categories.Add("adult");
+        }
+
+        SaveDesk(desk.WithBlockCategories(categories));
+    }
+
+    private void AddAppLimit(string key, int minutes)
+    {
+        if (SelectedDesk is not { } desk)
+        {
+            return;
+        }
+
+        if (string.IsNullOrEmpty(key))
+        {
+            _parentHint = "先从下拉框里挑一款软件。";
+            PushHint("parent", _parentHint);
+            return;
+        }
+
+        if (minutes is < 5 or > 600)
+        {
+            _parentHint = "分钟数要填数字，范围 5–600。";
+            PushHint("parent", _parentHint);
+            return;
+        }
+
+        var limited = desk.WithAppLimit(key, minutes);
+        if (ReferenceEquals(limited, desk))
+        {
+            _parentHint = "这条限额已经是这样了。";
+            PushHint("parent", _parentHint);
+            return;
+        }
+
+        _parentHint = string.Empty;
+        PushHint("parent", string.Empty);
+        SaveDesk(limited);
+    }
+
+    private void RemoveAppLimit(string key)
+    {
+        if (SelectedDesk is not { } desk || string.IsNullOrEmpty(key))
+        {
+            return;
+        }
+
+        SaveDesk(desk.WithAppLimit(key, null));
+    }
+
+    private void SaveDesk(Desk desk)
+    {
+        if (!EnsureParentUnlocked())
+        {
+            return;
+        }
+
+        try
+        {
+            var saved = _host.SaveDesk(desk);
+            _selectedDeskId = saved.Id;
+        }
+        catch (Exception ex) when (ex is RemoteFaultException or UnauthorizedAccessException or IOException)
+        {
+            _parentHint = "书桌没有保存：" + ex.Message;
+            PushHint("parent", _parentHint);
+        }
+
+        PushFormDesk();
+        PushFormDuration();
+        PushFormLimits();
+        PersistFamilyIfConfigured();
+    }
+
+    // ============================================================
+    // 密码 / 找回码 / 邮件
+    // ============================================================
+    private void ChangePin(string oldPin, string newPin, string confirmPin)
+    {
+        try
+        {
+            if (PinHasher.NormalizePin(newPin) != PinHasher.NormalizePin(confirmPin))
+            {
+                PushHint("pin", "两次新密码不一致。");
+                return;
+            }
+
+            var saved = _host.ChangePin(oldPin, newPin);
+            _parentUnlocked = true;
+            // 改密码不动找回码；远程模式下服务不回传找回码，提醒家长沿用旧的那枚。
+            Push("pinCleared");
+            PushFormPin();
+            PushHint("pin", saved.RecoveryCode is null ? "密码已改。找回码不变（沿用首次设置时抄下的那枚）。" : "密码已改。");
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or RemoteFaultException)
+        {
+            PushHint("pin", ex.Message);
+        }
+    }
+
+    private void CopyRecovery()
+    {
+        var code = _host.Family?.RecoveryCode;
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            _recoveryHint = _host.IsRemote
+                ? "守护服务不再显示找回码；请翻出首次设置时抄下的那枚。"
+                : "还没有生成找回码，先完成家长设置。";
+        }
+        else
+        {
+            try
+            {
+                System.Windows.Clipboard.SetText(code);
+                _recoveryHint = "已复制到剪贴板，请粘贴到备忘或纸质本子上。";
+            }
+            catch (Exception)
+            {
+                _recoveryHint = "复制失败，请手动抄下来。";
+            }
+        }
+
+        PushFormPin();
+    }
+
+    private void SaveRecoveryEmail(string email)
+    {
+        if (email.Length > 0 && (!email.Contains('@') || !email.Contains('.')))
+        {
+            PushHint("mail", "邮箱格式看起来不太对，请检查。");
+            return;
+        }
+
+        _recoveryEmail = email;
+        if (!EnsureParentUnlocked())
+        {
+            PushHint("mail", "请先在弹出的密码框里验证家长密码。");
+            LoadDurationFromFamily();
+            return;
+        }
+
+        PersistFamilyIfConfigured();
+        PushFormPin();
+        PushHint("mail", string.IsNullOrWhiteSpace(email)
+            ? "已清除备用邮箱。"
+            : $"已保存备用邮箱：{email}（忘记密码时可用它收验证码）。");
+    }
+
+    private void MailPreset(string tag)
+    {
+        var preset = SmtpConfig.Preset(tag);
+        if (preset is null)
+        {
+            return;
+        }
+
+        _mailHost = preset.Host;
+        _mailPort = preset.Port.ToString();
+        _mailSsl = preset.UseSsl;
+        PushFormMail();
+        PushHint("mail", $"已填入 {tag.ToUpperInvariant()} 的服务器与端口，请补全邮箱账号和授权码。");
+    }
+
+    private async void SaveMail(string host, string port, bool ssl, string user, string pass)
+    {
+        int.TryParse(port, out var portNum);
+        try
+        {
+            if (string.IsNullOrWhiteSpace(host) && string.IsNullOrWhiteSpace(user) && string.IsNullOrWhiteSpace(pass))
+            {
+                // 三项全空 = 清除邮件设置。
+                await _host.SaveSmtpAsync(new SmtpConfig(string.Empty, 0, false, string.Empty, string.Empty));
+                PushHint("mail", "已清除邮件设置。邮箱找回密码在配置好 SMTP 之前不可用。");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(user))
+            {
+                PushHint("mail", "服务器和账号要一起填；授权码留空表示沿用已保存的。");
+                return;
+            }
+
+            // 授权码只发往守护服务（加密落盘），界面不保存、不再读取。
+            await _host.SaveSmtpAsync(new SmtpConfig(host, portNum, ssl, user, pass));
+            PushHint("mail", "已保存邮件设置（授权码加密存放）。之后找回密码会真实发信到备用邮箱。");
+        }
+        catch (Exception ex) when (ex is RemoteFaultException or InvalidOperationException)
+        {
+            PushHint("mail", "保存失败：" + ex.Message);
+        }
+    }
+
+    // ============================================================
+    // 守护服务
+    // ============================================================
+    private (bool Installed, string Status, string InstallLabel) ServiceStatus()
+    {
+        if (ServiceControl.IsInstalled())
+        {
+            var running = ServiceControl.IsRunning();
+            return (true,
+                running
+                    ? "守护服务已安装并在运行：开机自动守护已生效，进程孩子杀不掉。"
+                    : "守护服务已安装但未运行：点「重新安装/启动」会重启它。",
+                "重新安装/启动");
+        }
+
+        return (false,
+            "尚未安装守护服务：现在只在软件运行时守护，重启电脑后不自动生效。建议点「安装守护服务」。",
+            "安装守护服务");
+    }
+
+    private void InstallService()
+    {
+        if (!ServiceControl.IsAdministrator())
+        {
+            try
+            {
+                ServiceControl.RunElevated("--install-service");
+                ScheduleServiceStatusRefresh();
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show("提权失败：" + ex.Message, "澄时");
+            }
+
+            return;
+        }
+
+        try
+        {
+            ServiceControl.Install();
+            PushFormService();
+            System.Windows.MessageBox.Show("守护服务已安装并启动。", "澄时");
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show("安装失败：" + ex.Message, "澄时");
+        }
+    }
+
+    private void UninstallService()
+    {
+        if (!ServiceControl.IsAdministrator())
+        {
+            try
+            {
+                ServiceControl.RunElevated("--uninstall-service");
+                ScheduleServiceStatusRefresh();
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show("提权失败：" + ex.Message, "澄时");
+            }
+
+            return;
+        }
+
+        try
+        {
+            ServiceControl.Uninstall();
+            PushFormService();
+            System.Windows.MessageBox.Show("守护服务已卸载。", "澄时");
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show("卸载失败：" + ex.Message, "澄时");
+        }
+    }
+
+    private void ScheduleServiceStatusRefresh()
+    {
+        _ = Task.Delay(3000).ContinueWith(_ =>
+        {
+            try
+            {
+                Dispatcher.Invoke(PushFormService);
+            }
+            catch
+            {
+                // 窗口已关闭等情况忽略。
+            }
+        }, TaskScheduler.Default);
+    }
+
+    // ============================================================
+    // 拦截演示 / 帮助
+    // ============================================================
+    private void Spike()
+    {
+        if (_host.IsGuarding)
+        {
+            _spikeHint = "正在守护孩子，不能同时试拦截。先找家长暂停。";
+            PushHint("spike", _spikeHint);
+            return;
+        }
+
+        try
+        {
+            var result = _host.Start(BuiltinDesks.SpikeId, TimeSpan.FromMinutes(1), pinned: false, pin: null);
+            _spikeHint = EngineHint(null);
+            PushHint("spike", _spikeHint);
+            _childHintOverride = "试拦截：只留计算器。打开记事本应被关掉。";
+            PushState(result.Snapshot);
+        }
+        catch (Exception ex) when (ex is ArgumentException or RemoteFaultException)
+        {
+            _spikeHint = ex.Message;
+            PushHint("spike", _spikeHint);
+        }
+    }
+
+    private void CopyFeedbackEmail()
+    {
+        try
+        {
+            System.Windows.Clipboard.SetText(FeedbackEmail);
+            PushHint("feedback", "邮箱已复制，粘贴到邮件里就能发。");
+        }
+        catch (Exception ex)
+        {
+            PushHint("feedback", FeedbackEmail);
+            FileLog.Write("app", $"复制反馈邮箱失败：{ex.Message}");
+        }
+    }
+
+    private void OpenMailApp()
+    {
+        var body = $"\n\n----\n澄时 {VersionText()} · Windows {Environment.OSVersion.Version}";
+        try
+        {
+            Process.Start(new ProcessStartInfo(
+                $"mailto:{FeedbackEmail}?subject={Uri.EscapeDataString("澄时问题反馈")}&body={Uri.EscapeDataString(body)}")
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            PushHint("feedback", "没找到邮件程序，复制邮箱后到网页邮箱发就行。");
+            FileLog.Write("app", $"打开邮件应用失败：{ex.Message}");
+        }
+    }
+
+    private void OpenLogs()
+    {
+        try
+        {
+            var dir = FileLog.CurrentDirectory;
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+            {
+                PushHint("feedback", "日志还没生成，先跑一次守护再来看。");
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\""));
+        }
+        catch (Exception ex)
+        {
+            PushHint("feedback", "打不开日志文件夹，请到数据目录下的 logs 手动查看。");
+            FileLog.Error("app", "打开日志文件夹失败。", ex);
+        }
+    }
+
     private void OnBlocked(BlockedMessage blocked)
     {
         Dispatcher.Invoke(() =>
         {
-            var label = System.IO.Path.GetFileNameWithoutExtension(blocked.FileName);
+            var label = Path.GetFileNameWithoutExtension(blocked.FileName);
             _blocked.Insert(0, label);
             if (_blocked.Count > 8)
             {
                 _blocked.RemoveAt(_blocked.Count - 1);
             }
 
-            var view = _blocked.ToList();
-            BlockedList.ItemsSource = null;
-            BlockedList.ItemsSource = view;
-            DashboardBlockedList.ItemsSource = null;
-            DashboardBlockedList.ItemsSource = view;
-            DashboardBlockedEmpty.Visibility = _blocked.Count == 0
-                ? Visibility.Visible
-                : Visibility.Collapsed;
+            PushState(_host.Snapshot);
+            PushDashboard(_host.Snapshot);
         });
     }
 
-    private void Sponsor_Click(object sender, RoutedEventArgs e)
+    // ============================================================
+    // C# → JS：状态构建
+    // ============================================================
+    private void PushState(SessionSnapshot snapshot)
     {
-        new SponsorWindow { Owner = this }.ShowDialog();
-    }
+        var child = snapshot.Phase is SessionPhase.InDesk or SessionPhase.TimeUp;
+        var timeUp = snapshot.Phase == SessionPhase.TimeUp;
+        var spike = child && !timeUp && !snapshot.Parental;
 
-    private void Nav_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not RadioButton { IsChecked: true } nav)
+        string caption;
+        string childHint;
+        List<string> tiles = [];
+        var askMore = false;
+        string? graceText = null;
+        string? warningText = null;
+        if (timeUp)
         {
-            return;
+            caption = "今天的屏幕时间用完了";
+            childHint = string.IsNullOrWhiteSpace(_childHintOverride)
+                ? "明天早上自动恢复；家长可以加时，或输入密码结束守护。已锁屏的话，登录后会自动弹出此界面。"
+                : _childHintOverride;
+            askMore = snapshot.Parental;
         }
-
-        // XAML 加载期间 IsChecked 会先触发一次，此时页面还没建完。
-        if (DashboardPage is null || SettingsPage is null || HelpPage is null)
+        else if (spike)
         {
-            return;
+            caption = "试拦截还剩";
+            childHint = string.IsNullOrWhiteSpace(_childHintOverride)
+                ? "只留计算器。打开记事本应被关掉。"
+                : _childHintOverride;
+            tiles = BuiltinDesks.Spike().Apps
+                .Select(a => a.DisplayName)
+                .Distinct(StringComparer.CurrentCultureIgnoreCase)
+                .ToList();
         }
-
-        DashboardPage.Visibility = ReferenceEquals(nav, NavDashboard) ? Visibility.Visible : Visibility.Collapsed;
-        SettingsPage.Visibility = ReferenceEquals(nav, NavSettings) ? Visibility.Visible : Visibility.Collapsed;
-        HelpPage.Visibility = ReferenceEquals(nav, NavHelp) ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private void DashboardToSettings_Click(object sender, RoutedEventArgs e) => NavSettings.IsChecked = true;
-
-    private void DashboardGuard_Click(object sender, RoutedEventArgs e)
-    {
-        if (!_host.IsConfigured)
+        else if (child)
         {
-            NavSettings.IsChecked = true;
-            ParentHint.Text = "先在这里设好家长密码和允许的软件，再回来开始守护。";
-            return;
-        }
+            // 时间到后的「保存进度」宽限：倒计时已停在 0，让孩子把存档/文档保存完再锁屏。
+            if (snapshot.GraceRemaining > TimeSpan.Zero)
+            {
+                caption = "保存进度";
+                graceText = $"时间到啦！还有 {FormatRemaining(snapshot.GraceRemaining)} 保存你的进度，之后就会锁屏。";
+            }
+            else
+            {
+                caption = "今天还剩";
+                warningText = WarningFor(snapshot.Remaining);
+            }
 
-        Guard_Click(sender, e);
-    }
-
-    private void UpdateEngineStatus()
-    {
-        var lines = new List<string>
-        {
-            _host.IsRemote
-                ? "守护服务已连接：以系统权限执行，孩子关不掉。"
-                : "本机守护模式：断网和防强杀没启用，安装并启动澄时服务后自动升级。",
-        };
-        if (!string.IsNullOrWhiteSpace(_host.EtwHint))
-        {
-            lines.Add(_host.EtwHint);
-        }
-
-        if (!string.IsNullOrWhiteSpace(_host.GuardHint))
-        {
-            lines.Add(_host.GuardHint);
-        }
-
-        var text = string.Join("\n", lines);
-        SideEngineDetail.Text = text;
-        EngineStatusText.Text = text;
-        HelpEngineText.Text = text;
-        SideEngineText.Text = _host.IsRemote ? "守护服务已连接" : "本机守护";
-        EngineDot.Fill = _host.IsRemote
-            ? (Brush)FindResource("AccentBrush")
-            : new SolidColorBrush(Color.FromRgb(0xA3, 0x56, 0x2E));
-    }
-
-    private void UpdateStatusPill(SessionSnapshot snapshot)
-    {
-        if (snapshot.IsGuarding)
-        {
-            TitlePillText.Text = "守护中";
-            TitlePillText.Foreground = (Brush)FindResource("AccentBrush");
-            TitlePillDot.Fill = (Brush)FindResource("AccentBrush");
-            TitlePillBorder.Background = (Brush)FindResource("AccentSoftBrush");
-        }
-        else if (_host.IsConfigured)
-        {
-            TitlePillText.Text = "已暂停";
-            TitlePillText.Foreground = (Brush)FindResource("MutedBrush");
-            TitlePillDot.Fill = (Brush)FindResource("MutedBrush");
-            TitlePillBorder.Background = (Brush)FindResource("CanvasBrush");
+            var desk = snapshot.DeskId is null ? null : _host.FindDesk(snapshot.DeskId);
+            tiles = desk?.Apps
+                .Select(a => a.DisplayName)
+                .Distinct(StringComparer.CurrentCultureIgnoreCase)
+                .ToList() ?? [];
+            childHint = string.IsNullOrWhiteSpace(_childHintOverride) ? ChildHintFor(snapshot) : _childHintOverride;
         }
         else
         {
-            TitlePillText.Text = "未设置";
-            TitlePillText.Foreground = (Brush)FindResource("MutedBrush");
-            TitlePillDot.Fill = (Brush)FindResource("MutedBrush");
-            TitlePillBorder.Background = (Brush)FindResource("CanvasBrush");
+            caption = string.Empty;
+            childHint = string.Empty;
         }
+
+        string pillText;
+        string pillTone;
+        if (snapshot.IsGuarding)
+        {
+            pillText = "守护中";
+            pillTone = "accent";
+        }
+        else if (_host.IsConfigured)
+        {
+            pillText = "已暂停";
+            pillTone = "muted";
+        }
+        else
+        {
+            pillText = "未设置";
+            pillTone = "muted";
+        }
+
+        Push("state", new
+        {
+            view = timeUp ? "timeup" : child ? "desk" : "parent",
+            pill = new { text = pillText, tone = pillTone },
+            closeHidden = snapshot.Parental && child,
+            caption,
+            remainingText = child ? FormatRemaining(snapshot.Remaining) : string.Empty,
+            childHint,
+            graceText,
+            warningText,
+            tiles = tiles.Select(n => new { name = n }),
+            blocked = _blocked.ToList(),
+            askParent = snapshot.Parental,
+            askMore,
+            engine = new
+            {
+                ok = _host.IsRemote,
+                title = _host.IsRemote ? "守护服务已连接" : "本机守护",
+                detail = EngineDetailText(),
+            },
+        });
     }
 
-    private static string FormatMinutes(TimeSpan span)
+    private void PushDashboard(SessionSnapshot snapshot)
     {
-        if (span.TotalHours >= 1)
-        {
-            var hours = (int)span.TotalHours;
-            var minutes = span.Minutes;
-            return minutes == 0 ? $"{hours} 小时" : $"{hours} 小时 {minutes} 分";
-        }
-
-        return $"{(int)span.TotalMinutes} 分钟";
-    }
-
-    private static void SetDonut(System.Windows.Shapes.Path path, double fraction)
-    {
-        if (fraction <= 0)
-        {
-            path.Data = null;
-            return;
-        }
-
-        if (fraction > 1)
-        {
-            fraction = 1;
-        }
-
-        const double radius = 57.5;
-        const double cx = 64;
-        const double cy = 64;
-        var start = new System.Windows.Point(cx, cy - radius);
-        var radians = ((fraction * 360.0) - 90.0) * Math.PI / 180.0;
-        var end = new System.Windows.Point(cx + (radius * Math.Cos(radians)), cy + (radius * Math.Sin(radians)));
-        var figure = new PathFigure { StartPoint = start, IsClosed = false };
-        figure.Segments.Add(new ArcSegment(end, new Size(radius, radius), 0, fraction > 0.5, SweepDirection.Clockwise, true));
-        var geometry = new PathGeometry();
-        geometry.Figures.Add(figure);
-        path.Data = geometry;
-    }
-
-    private void UpdateDashboard(SessionSnapshot snapshot)
-    {
-        UpdateStatusPill(snapshot);
-        UpdateEngineStatus();
-
         var budget = _host.Budget;
         var limit = budget.Limit;
         var used = budget.Used;
         var fraction = limit <= TimeSpan.Zero ? 0 : used.TotalMinutes / limit.TotalMinutes;
-        SetDonut(DonutProgress, fraction);
-        DonutRemainingText.Text = FormatRemaining(budget.Remaining);
-        DonutUsedText.Text = $"已用 {FormatMinutes(used)} / 共 {FormatMinutes(limit)}";
-        DonutHintText.Text = snapshot.IsGuarding
-            ? "正在守护。时间用完会自动锁到系统桌面。"
-            : _host.IsConfigured
-                ? "现在没有守护。点右上角「开始守护」。"
-                : "先完成家长设置，今天的时间额度才会生效。";
 
         var desk = snapshot.Phase == SessionPhase.InDesk && snapshot.DeskId is not null
             ? _host.FindDesk(snapshot.DeskId)
             : _host.FindDesk(_host.Family?.DeskId ?? string.Empty);
-        if (desk is not null)
-        {
-            DashboardDeskName.Text = desk.Name;
-            DashboardDeskSummary.Text = desk.Summary;
-            DashboardDeskApps.ItemsSource = desk.Apps;
-            DashboardDeskEmpty.Visibility = desk.Apps.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        }
-        else
-        {
-            DashboardDeskName.Text = "—";
-            DashboardDeskSummary.Text = "还没有选书桌。";
-            DashboardDeskApps.ItemsSource = null;
-            DashboardDeskEmpty.Visibility = Visibility.Visible;
-        }
 
-        DashboardGuardButton.Content = !_host.IsConfigured
-            ? "完成家长设置"
-            : snapshot.IsGuarding
-                ? "暂停守护"
-                : "开始守护";
-        DashboardGuardButton.IsEnabled = snapshot.Phase == SessionPhase.Idle || !snapshot.IsGuarding;
-        RewardButton.Visibility = _host.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
+        var family = _host.Family;
+        var guardEnabled = snapshot.Phase == SessionPhase.Idle || !snapshot.IsGuarding;
+        var guardText = !_host.IsConfigured ? "完成家长设置" : snapshot.IsGuarding ? "暂停守护" : "开始守护";
 
-        GreetingText.Text = Greeting();
-        HeroSummaryText.Text = HeroLine(snapshot, used, limit);
-        RefreshDeskCards();
-        var familyLimits = _host.Family;
-        WeekdayLimitText.Text = $"周内每天 {DescribeMinutes(familyLimits?.WeekdayMinutes ?? familyLimits?.DailyMinutes ?? 60)}";
-        WeekendLimitText.Text = $"周末每天 {DescribeMinutes(familyLimits?.WeekendMinutes ?? familyLimits?.DailyMinutes ?? 120)}";
-        AnimateDashboardOnce();
-        DashboardBlockedEmpty.Visibility = _blocked.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        if (DashboardBlockedList.ItemsSource is null)
+        RefreshWeekUsageCache();
+
+        Push("dashboard", new
         {
-            DashboardBlockedList.ItemsSource = _blocked.ToList();
-        }
-
-        DashboardHintText.Text = _startupHint ?? string.Empty;
-        RefreshWeekUsage();
-        RefreshAppUsage();
+            greeting = Greeting(),
+            heroLine = HeroLine(snapshot, used, limit),
+            budget = new
+            {
+                fraction = Math.Clamp(fraction, 0d, 1d),
+                remainingText = FormatRemaining(budget.Remaining),
+                usedText = $"已用 {FormatMinutes(used)} / 共 {FormatMinutes(limit)}",
+                hint = snapshot.IsGuarding
+                    ? "正在守护。时间用完会自动锁到系统桌面。"
+                    : _host.IsConfigured
+                        ? "现在没有守护。点右上角「开始守护」。"
+                        : "先完成家长设置，今天的时间额度才会生效。",
+                weekdayText = $"周内每天 {DescribeMinutes(family?.WeekdayMinutes ?? family?.DailyMinutes ?? 60)}",
+                weekendText = $"周末每天 {DescribeMinutes(family?.WeekendMinutes ?? family?.DailyMinutes ?? 120)}",
+            },
+            deskCards = new[]
+            {
+                new { id = "homework", name = "写作业", summary = DeskCardSummary(BuiltinDesks.HomeworkId, "文档 + 词典 + 计算器") },
+                new { id = "class", name = "网课", summary = DeskCardSummary(BuiltinDesks.ClassId, "浏览器 + 笔记") },
+                new { id = "code", name = "编程", summary = DeskCardSummary(BuiltinDesks.CodeId, "IDE + 终端") },
+            },
+            week = new { empty = _weekEmptyCache, rows = _weekRowsCache ?? [] },
+            appUsage = AppUsagePayload(),
+            blocked = _blocked.ToList(),
+            guardBtn = new { text = guardText, enabled = guardEnabled },
+            rewardVisible = _host.IsConfigured,
+            currentDesk = new
+            {
+                name = desk?.Name ?? "—",
+                summary = desk?.Summary ?? "还没有选书桌。",
+                apps = desk?.Apps.Select(a => a.DisplayName)
+                    .Distinct(StringComparer.CurrentCultureIgnoreCase).ToArray() ?? [],
+                empty = desk is null || desk.Apps.Count == 0,
+            },
+            engineText = EngineDetailText(),
+            dashHint = _dashHint,
+        });
     }
 
     /// <summary>仪表盘三张书桌模板卡的摘要：用已配置书桌的说明和软件数，没动过就回落到内置说明。</summary>
-    private void RefreshDeskCards()
-    {
-        DeskCardHomeworkSummary.Text = DeskCardSummary(BuiltinDesks.HomeworkId, "文档 + 词典 + 计算器");
-        DeskCardClassSummary.Text = DeskCardSummary(BuiltinDesks.ClassId, "浏览器 + 笔记");
-        DeskCardCodeSummary.Text = DeskCardSummary(BuiltinDesks.CodeId, "IDE + 终端");
-    }
-
     private string DeskCardSummary(string id, string fallback)
     {
         var desk = _host.FindDesk(id);
         // 书桌的 Summary 本身就带「…等 N 款」的信息，别再叠加一份软件数。
         return string.IsNullOrWhiteSpace(desk?.Summary) ? fallback : desk.Summary;
+    }
+
+    /// <summary>最近七天用量：读日志有 30 秒节流，缓存最近一次的行数据。</summary>
+    private void RefreshWeekUsageCache()
+    {
+        if (DateTime.Now < _weekUsageNextRead)
+        {
+            return;
+        }
+
+        _weekUsageNextRead = DateTime.Now.AddSeconds(30);
+
+        var history = _usageLog.ReadRecent(6);
+        var usedToday = _host.IsConfigured ? _host.Budget.Used : TimeSpan.Zero;
+        if (history.Count == 0 && usedToday <= TimeSpan.Zero)
+        {
+            _weekEmptyCache = true;
+            _weekRowsCache = null;
+            return;
+        }
+
+        var maxMinutes = Math.Max(1, Math.Max(
+            usedToday.TotalMinutes,
+            history.Count == 0 ? 1 : history.Max(d => d.UsedMinutes)));
+        double Fraction(double minutes) => Math.Clamp(minutes / maxMinutes, 0d, 1d);
+
+        var rows = new List<object>();
+        if (usedToday > TimeSpan.Zero)
+        {
+            rows.Add(new
+            {
+                label = "今天",
+                fraction = Fraction(usedToday.TotalMinutes),
+                summary = $"已用 {FormatMinutes(usedToday)} / {FormatMinutes(_host.Budget.Limit)}",
+            });
+        }
+
+        foreach (var day in history)
+        {
+            var summary = FormatMinutes(TimeSpan.FromMinutes(day.UsedMinutes))
+                + (day.BlockedCount > 0 ? $" · 拦了 {day.BlockedCount} 次" : string.Empty);
+            rows.Add(new
+            {
+                label = $"{day.Date.Month}/{day.Date.Day} {DayLabel(day.Date.DayOfWeek)}",
+                fraction = Fraction(day.UsedMinutes),
+                summary,
+            });
+        }
+
+        _weekRowsCache = rows;
+        _weekEmptyCache = false;
+    }
+
+    // ============================================================
+    // 统计页（按应用的用量详情）
+    // ============================================================
+    private void PushStats()
+    {
+        var range = _statsRangeDays;
+        var history = _usageLog.ReadRecent(range); // 最新在前
+        var todayDate = DateOnly.FromDateTime(DateTime.Now);
+
+        // 应用键 → 展示名：以当前所有书桌为准，历史应用回落到文件名。
+        var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var desk in _host.Desks)
+        {
+            foreach (var app in desk.Apps)
+            {
+                names.TryAdd(app.Key, app.DisplayName);
+            }
+        }
+
+        string NameOf(string key)
+        {
+            if (names.TryGetValue(key, out var name))
+            {
+                return name;
+            }
+
+            var leaf = Path.GetFileName(key);
+            return leaf.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                ? Path.GetFileNameWithoutExtension(leaf)
+                : leaf;
+        }
+
+        // 今天的实时数据也并进来（今天还没跨天落盘）。
+        var todayTotal = _host.IsConfigured ? _host.Budget.Used : TimeSpan.Zero;
+        var todayMinutes = (int)Math.Round(todayTotal.TotalMinutes);
+        var todayApps = (_host.AppUsage ?? [])
+            .Where(r => r.UsedMinutes > 0)
+            .ToDictionary(r => r.Key, r => r.UsedMinutes, StringComparer.OrdinalIgnoreCase);
+
+        var totals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        void Accumulate(IReadOnlyDictionary<string, int>? apps)
+        {
+            if (apps is null)
+            {
+                return;
+            }
+
+            foreach (var (key, minutes) in apps)
+            {
+                if (minutes > 0)
+                {
+                    totals[key] = totals.GetValueOrDefault(key) + minutes;
+                }
+            }
+        }
+
+        foreach (var day in history)
+        {
+            Accumulate(day.Apps);
+        }
+
+        Accumulate(todayApps);
+
+        // ---- 每日柱图（旧→新，今天垫最后）----
+        var ordered = history.OrderBy(d => d.Date).ToList();
+        var maxMinutes = Math.Max(1, Math.Max(
+            todayMinutes,
+            ordered.Count == 0 ? 1 : ordered.Max(d => d.UsedMinutes)));
+        double Fraction(int minutes) => Math.Clamp((double)minutes / maxMinutes, 0.02, 1d);
+
+        var daily = new List<object>();
+        foreach (var d in ordered)
+        {
+            daily.Add(new
+            {
+                label = $"{d.Date.Month}/{d.Date.Day}",
+                totalText = FormatMinutes(TimeSpan.FromMinutes(d.UsedMinutes)),
+                fraction = Fraction(d.UsedMinutes),
+                blocked = d.BlockedCount,
+            });
+        }
+
+        daily.Add(new
+        {
+            label = "今天",
+            totalText = FormatMinutes(todayTotal),
+            fraction = Fraction(todayMinutes),
+            blocked = -1,
+        });
+
+        // ---- 应用排行（合计分钟降序，取前 8，其余并入「其他」）----
+        var ranked = totals
+            .OrderByDescending(pair => pair.Value)
+            .ToList();
+        var totalAppMinutes = ranked.Sum(pair => pair.Value);
+        var rankingRows = new List<object>();
+        foreach (var (key, minutes) in ranked.Take(8))
+        {
+            rankingRows.Add(new
+            {
+                name = NameOf(key),
+                minutesText = FormatMinutes(TimeSpan.FromMinutes(minutes)),
+                share = totalAppMinutes > 0 ? $"{Math.Round(100d * minutes / totalAppMinutes)}%" : "—",
+                fraction = totalAppMinutes > 0 ? Math.Clamp((double)minutes / totalAppMinutes, 0.02, 1d) : 0d,
+            });
+        }
+
+        if (ranked.Count > 8)
+        {
+            var rest = ranked.Skip(8).Sum(pair => pair.Value);
+            rankingRows.Add(new
+            {
+                name = $"其他 {ranked.Count - 8} 款",
+                minutesText = FormatMinutes(TimeSpan.FromMinutes(rest)),
+                share = totalAppMinutes > 0 ? $"{Math.Round(100d * rest / totalAppMinutes)}%" : "—",
+                fraction = totalAppMinutes > 0 ? Math.Clamp((double)rest / totalAppMinutes, 0.02, 1d) : 0d,
+            });
+        }
+
+        // ---- 每日明细（最新在前，今天在最上）----
+        var detail = new List<object>
+        {
+            new
+            {
+                dateText = $"今天 {todayDate.Month}/{todayDate.Day}",
+                totalText = FormatMinutes(todayTotal),
+                blockedText = "—",
+                topApps = todayApps.Count == 0
+                    ? "还没开始用"
+                    : string.Join("、", todayApps
+                        .OrderByDescending(pair => pair.Value)
+                        .Take(3)
+                        .Select(pair => NameOf(pair.Key))),
+            },
+        };
+        foreach (var d in history)
+        {
+            var top = d.Apps is null
+                ? "—"
+                : d.Apps.Count == 0
+                    ? "—"
+                    : string.Join("、", d.Apps
+                        .OrderByDescending(pair => pair.Value)
+                        .Take(3)
+                        .Select(pair => NameOf(pair.Key)));
+            detail.Add(new
+            {
+                dateText = $"{d.Date.Month}/{d.Date.Day} {DayLabel(d.Date.DayOfWeek)}",
+                totalText = FormatMinutes(TimeSpan.FromMinutes(d.UsedMinutes)),
+                blockedText = d.BlockedCount > 0 ? $"{d.BlockedCount} 次" : "—",
+                topApps = top,
+            });
+        }
+
+        // ---- 汇总 ----
+        var totalMinutes = ordered.Sum(d => d.UsedMinutes) + todayMinutes;
+        var dayCount = ordered.Count + 1;
+        var avgMinutes = dayCount > 0 ? totalMinutes / dayCount : 0;
+        var blockedSum = ordered.Sum(d => d.BlockedCount);
+
+        Push("stats", new
+        {
+            range,
+            summary = new
+            {
+                totalText = FormatMinutes(TimeSpan.FromMinutes(totalMinutes)),
+                avgText = FormatMinutes(TimeSpan.FromMinutes(avgMinutes)),
+                appCount = totals.Count,
+                blockedText = blockedSum > 0 ? $"{blockedSum} 次" : "0 次",
+            },
+            daily,
+            ranking = rankingRows,
+            detail,
+        });
+    }
+
+    private string _appUsageSignature = string.Empty;
+
+    /// <summary>今天每个软件用了多久。用量每秒变化，但只有内容真的变了才重推列表。</summary>
+    private object AppUsagePayload()
+    {
+        var rows = _host.AppUsage ?? [];
+        var tracked = rows.Where(r => r.UsedMinutes > 0 || r.HasLimit).ToList();
+        var usedCount = tracked.Count(r => r.UsedMinutes > 0);
+        var overCount = tracked.Count(r => r.Exhausted);
+        var hint = tracked.Count == 0
+            ? string.Empty
+            : overCount > 0 ? $"{usedCount} 款在用 · {overCount} 款额度用完" : $"{usedCount} 款在用";
+        var signature = string.Join("|", rows.Select(r => $"{r.Key}:{r.UsedMinutes}:{r.LimitMinutes}")) + "|" + hint;
+        var changed = signature != _appUsageSignature;
+        _appUsageSignature = signature;
+
+        if (tracked.Count == 0)
+        {
+            return new { empty = true, hint = string.Empty, rows = Array.Empty<object>(), changed };
+        }
+
+        // 有限额的软件按自己的额度画条（看还剩多少），其余按彼此的相对用量画条（看谁用得多）。
+        var maxUsed = Math.Max(1, tracked.Max(r => r.UsedMinutes));
+        double Fraction(AppUsage row) => row.HasLimit
+            ? row.Fraction
+            : Math.Clamp((double)row.UsedMinutes / maxUsed, 0d, 1d);
+
+        var payload = tracked.Select(row => new
+        {
+            name = row.DisplayName,
+            summary = row.Summary,
+            fraction = Math.Clamp(Fraction(row), 0d, 1d),
+            over = row.Exhausted,
+        }).ToList();
+        return new { empty = false, hint, rows = payload, changed };
+    }
+
+    private void PushFormAll()
+    {
+        PushFormHead();
+        PushPreview();
+        PushFormDesk();
+        PushFormDuration();
+        PushFormSchedule();
+        PushFormLimits();
+        PushFormPin();
+        PushFormMail();
+        PushFormService();
+        PushFormFlags();
+    }
+
+    private void PushFormHead()
+    {
+        var configured = _host.IsConfigured;
+        Push("form.head", new
+        {
+            title = configured ? "家长设置" : "给孩子设屏幕时间和软件",
+            lead = configured
+                ? "改时长或软件后点开始守护。孩子在守护画面里改不了。"
+                : "开始守护后，不在名单里的软件会被关掉；今天的时间用完就只剩系统桌面。",
+        });
+    }
+
+    private void PushFormDesk()
+    {
+        var desk = SelectedDesk;
+        var desks = _host.Desks
+            .Where(d => d.Id is not BuiltinDesks.SpikeId and not BuiltinDesks.LockdownId)
+            .Select(d => new { id = d.Id, name = d.Name, summary = d.Summary })
+            .ToList();
+        var names = desk?.Apps
+            .Select(a => a.DisplayName)
+            .Distinct(StringComparer.CurrentCultureIgnoreCase)
+            .ToList() ?? [];
+        var empty = names.Count == 0;
+        var allowedSites = desk?.AllowedSiteList.ToList() ?? [];
+        var blockedSites = desk?.BlockedSiteList.ToList() ?? [];
+
+        desks.Insert(0, new { id = BuiltinDesks.FullPcId, name = "整个电脑", summary = "不限制软件，只按时长锁屏" });
+        var unrestricted = desk?.Unrestricted == true;
+
+        Push("form.desk", new
+        {
+            selected = desk?.Id ?? string.Empty,
+            desks,
+            unrestricted,
+            guardEnabled = !empty || unrestricted,
+            apps = desk?.Apps.Select(a => new { key = a.Key, name = a.DisplayName }).ToList() ?? [],
+            sites = new
+            {
+                hint = allowedSites.Count > 0
+                    ? "已开启白名单模式：浏览器只能打开上面这些网站。"
+                    : "浏览器（Chrome / Edge）里，勾选的类别和禁止的网站会被拦掉，写作业时还可整机断网。",
+                allowed = allowedSites,
+                blocked = blockedSites,
+                categories = new
+                {
+                    video = desk?.BlockCategoryList.Contains("video", StringComparer.OrdinalIgnoreCase) == true,
+                    games = desk?.BlockCategoryList.Contains("games", StringComparer.OrdinalIgnoreCase) == true,
+                    adult = desk?.BlockCategoryList.Contains("adult", StringComparer.OrdinalIgnoreCase) == true,
+                },
+            },
+        });
+        PushPreview();
+    }
+
+    private void PushFormDuration()
+    {
+        var desk = SelectedDesk;
+        var unrestricted = desk?.Unrestricted == true;
+        var empty = desk is null || desk.Apps.Count == 0;
+        var minutes = ActiveMinutes;
+        var preset = minutes is 30 or 60 or 90 or 120;
+        Push("form.duration", new
+        {
+            tab = _weekendTabActive ? "weekend" : "weekday",
+            minutesText = DescribeMinutes(minutes),
+            otherDays = _weekendTabActive
+                ? $"周中每天 {DescribeMinutes(_weekdayMinutes)}"
+                : $"周末每天 {DescribeMinutes(_weekendMinutes)}",
+            preset = preset ? minutes.ToString() : "custom",
+            customValue = minutes,
+            whatHappens = unrestricted
+                ? "时间一到会锁定整个电脑，明天自动恢复。"
+                : empty
+                    ? "先加一款软件，否则孩子几乎什么都开不了。"
+                    : "用完后，名单外的软件会被关掉，直到明天或输入家长密码。",
+        });
+        PushPreview();
+        PushPreview();
+    }
+
+    private void PushFormSchedule()
+    {
+        var rows = _weekOrder.Select((day, index) =>
+        {
+            if (_schedule is not null && _schedule.TryGetValue(day, out var custom))
+            {
+                return new { day = index, label = DayLabel(day), minutes = custom, custom = true };
+            }
+
+            var baseMin = day is DayOfWeek.Saturday or DayOfWeek.Sunday ? _weekendMinutes : _weekdayMinutes;
+            return new { day = index, label = DayLabel(day), minutes = baseMin, custom = false };
+        }).ToList();
+        Push("form.schedule", new { rows });
+    }
+
+    private void PushFormLimits()
+    {
+        var desk = SelectedDesk;
+        var choices = (desk?.Apps ?? [])
+            .GroupBy(a => a.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(a => a.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+            .Select(a => new { key = a.Key, name = a.DisplayName })
+            .ToList();
+        var rows = (desk?.LimitedApps ?? [])
+            .Where(a => a.DailyMinutes is > 0)
+            .Select(a => new { key = a.Key, name = a.DisplayName, summary = $"每天 {a.DailyMinutes} 分钟" })
+            .ToList();
+        Push("form.limits", new { choices, rows });
+    }
+
+    private void PushFormPin()
+    {
+        var configured = _host.IsConfigured;
+        Push("form.pin", new
+        {
+            firstRun = !configured,
+            recoveryCode = _host.IsRemote
+                ? "找回码已由守护服务保管（不再显示，请用首次设置时抄下的那枚）"
+                : _host.Family?.RecoveryCode ?? "进入设置后自动生成",
+            recoveryHint = _recoveryHint,
+            recoveryEmail = _recoveryEmail,
+        });
+    }
+
+    private void PushFormMail() => Push("form.mail", new
+    {
+        host = _mailHost,
+        port = _mailPort,
+        ssl = _mailSsl,
+        user = _mailUser,
+    });
+
+    private void PushFormService()
+    {
+        var (installed, status, label) = ServiceStatus();
+        Push("form.service", new
+        {
+            installed,
+            statusText = status,
+            installLabel = label,
+        });
+    }
+
+    private void PushFormFlags() => Push("form.flags", new
+    {
+        startWithWindows = _startWithWindows,
+        guardOnLaunch = _guardOnLaunch,
+        bedtime = _bedtime,
+        breakReminder = _breakReminderMinutes,
+    });
+
+    /// <summary>
+    /// 守护生效预览：把「能用什么 × 能用多久 × 单独限时 × 什么时候开始」
+    /// 叠加后的结果讲成大白话。设置页顶部实时刷新，回答「到底什么在生效」。
+    /// </summary>
+    private void PushPreview()
+    {
+        var guarding = _host.Snapshot.IsGuarding;
+        var head = guarding
+            ? "正在守护中，这些规则都在生效："
+            : "点「开始守护」后，以下规则会同时生效：";
+
+        var lines = new List<string>();
+        var desk = SelectedDesk;
+        if (desk is null)
+        {
+            lines.Add("还没选书桌：先在「能用什么」里挑一个");
+        }
+        else if (desk.Unrestricted)
+        {
+            lines.Add("不限制软件：整台电脑随便用，网站也不拦，只用下面的时长来管");
+        }
+        else
+        {
+            var appCount = desk.Apps
+                .Select(a => a.DisplayName)
+                .Distinct(StringComparer.CurrentCultureIgnoreCase)
+                .Count();
+            var siteNote = desk.AllowedSiteList.Count > 0
+                ? $"；浏览器只能打开 {desk.AllowedSiteList.Count} 个白名单网站"
+                : string.Empty;
+            lines.Add(appCount == 0
+                ? "「" + desk.Name + "」书桌还没加软件：守护前至少加一款"
+                : $"只能用「{desk.Name}」书桌里的 {appCount} 款软件{siteNote}，名单外的会被关掉");
+        }
+
+        var today = DateTime.Now.DayOfWeek;
+        var todayMinutes = _schedule is not null && _schedule.TryGetValue(today, out var custom)
+            ? custom
+            : today is DayOfWeek.Saturday or DayOfWeek.Sunday ? _weekendMinutes : _weekdayMinutes;
+        var scheduleNote = _schedule is { Count: > 0 } ? $"（有 { _schedule.Count } 天单独设置）" : string.Empty;
+        lines.Add($"每天最多 {DescribeMinutes(todayMinutes)}{scheduleNote}；时间用完自动锁屏，次日恢复");
+
+        var limitedCount = desk?.LimitedApps.Count(a => a.DailyMinutes is > 0) ?? 0;
+        if (limitedCount > 0)
+        {
+            lines.Add($"其中 {limitedCount} 款软件单独限了时长，用完只关它，别的照常用");
+        }
+
+        if (_bedtime)
+        {
+            lines.Add("睡觉时段（22:00 – 07:00）到点断网");
+        }
+
+        Push("form.preview", new { head, lines });
+    }
+
+    private void PushHelp() => Push("help", new
+    {
+        engineText = EngineDetailText(),
+        aboutText = $"澄时 {VersionText()} · 所有设置和记录都只存在这台电脑上，不会上传。",
+        feedbackEmail = FeedbackEmail,
+    });
+
+    // ============================================================
+    // 文案工具（与旧版一致）
+    // ============================================================
+    private string ChildHintFor(SessionSnapshot snapshot)
+    {
+        var desk = snapshot.DeskId is null ? null : _host.FindDesk(snapshot.DeskId);
+        var names = desk?.Apps
+            .Select(a => a.DisplayName)
+            .Distinct(StringComparer.CurrentCultureIgnoreCase)
+            .Take(6)
+            .ToArray() ?? [];
+        return names.Length == 0
+            ? "现在只能用系统桌面。其它软件会被关掉。"
+            : $"只能用 {string.Join("、", names)}。其它软件会被关掉。";
     }
 
     private static string Greeting()
@@ -1572,239 +2206,56 @@ public partial class MainWindow : Window
         return $"今天共 {FormatMinutes(limit)}，现在没在守护。点右侧按钮就能开始。";
     }
 
-    private void AnimateDashboardOnce()
+    private static string FormatMinutes(TimeSpan span)
     {
-        if (_dashboardAnimated)
+        if (span.TotalHours >= 1)
         {
-            return;
+            var hours = (int)span.TotalHours;
+            var minutes = span.Minutes;
+            return minutes == 0 ? $"{hours} 小时" : $"{hours} 小时 {minutes} 分";
         }
 
-        _dashboardAnimated = true;
-        Fade(DashboardPage, 0, 1, null);
+        return $"{(int)span.TotalMinutes} 分钟";
     }
 
-    private sealed record WeekUsageRow(string Label, double BarHeight, string Summary);
-
-    private sealed record AppUsageRow(
-        string DisplayName, string Summary, double BarWidth, Brush BarBrush, Brush SummaryBrush);
-
-    private sealed record AppLimitChoice(string Key, string DisplayName);
-
-    private sealed record AppLimitRow(string Key, string DisplayName, string Summary);
-
-    private sealed record DayLimitRow(DayOfWeek Day, string Label, int Minutes, bool IsCustom);
-
-    private string _appUsageSignature = string.Empty;
-
-    private static readonly Brush UsageBarBrush =
-        BrushFromResource("AccentBrush", Color.FromRgb(0x2C, 0x45, 0x38));
-
-    private static readonly Brush UsageBarOverBrush =
-        BrushFromResource("DangerBrush", Color.FromRgb(0xA2, 0x45, 0x32));
-
-    private static readonly Brush UsageTextBrush =
-        BrushFromResource("MutedBrush", Color.FromRgb(0x6E, 0x67, 0x5E));
-
-    private static Brush BrushFromResource(string key, Color fallback)
+    private static string DescribeMinutes(int minutes) => minutes switch
     {
-        try
+        30 => "30 分钟",
+        60 => "1 小时",
+        90 => "90 分钟",
+        120 => "2 小时",
+        _ => $"{minutes} 分钟",
+    };
+
+    private static string FormatRemaining(TimeSpan remaining)
+    {
+        if (remaining.TotalHours >= 1)
         {
-            if (System.Windows.Application.Current?.TryFindResource(key) is Brush brush)
-            {
-                return brush;
-            }
-        }
-        catch (Exception)
-        {
-            // 资源还没就绪时回落到写死的同色值。
+            return $"{(int)remaining.TotalHours}:{remaining.Minutes:D2}:{remaining.Seconds:D2}";
         }
 
-        var solid = new SolidColorBrush(fallback);
-        solid.Freeze();
-        return solid;
+        return remaining.ToString(@"mm\:ss");
     }
 
-    /// <summary>今天每个软件用了多久。用量每秒变化，但只有内容真的变了才重刷列表。</summary>
-    private void RefreshAppUsage()
+    /// <summary>到点前的分级提醒口径：10 分钟预告、5 分钟收尾、最后 1 分钟。其余时段不打扰。</summary>
+    private static string? WarningFor(TimeSpan remaining)
     {
-        var rows = _host.AppUsage ?? [];
-        var signature = string.Join("|", rows.Select(r => $"{r.Key}:{r.UsedMinutes}:{r.LimitMinutes}"));
-        if (signature == _appUsageSignature)
+        if (remaining <= TimeSpan.Zero || remaining > TimeSpan.FromMinutes(10))
         {
-            return;
+            return null;
         }
 
-        _appUsageSignature = signature;
-
-        var tracked = rows.Where(r => r.UsedMinutes > 0 || r.HasLimit).ToList();
-        if (tracked.Count == 0)
+        if (remaining <= TimeSpan.FromMinutes(1))
         {
-            AppUsageList.ItemsSource = null;
-            AppUsageEmpty.Visibility = Visibility.Visible;
-            AppUsageHint.Text = string.Empty;
-            return;
+            return "最后 1 分钟！快把手头的事收尾。";
         }
 
-        // 有限额的软件按自己的额度画条（看还剩多少），其余按彼此的相对用量画条（看谁用得多）。
-        var maxUsed = Math.Max(1, tracked.Max(r => r.UsedMinutes));
-        double Fraction(AppUsage row) => row.HasLimit
-            ? row.Fraction
-            : Math.Clamp((double)row.UsedMinutes / maxUsed, 0d, 1d);
-
-        AppUsageList.ItemsSource = tracked
-            .Select(row => new AppUsageRow(
-                row.DisplayName,
-                row.Summary,
-                Math.Max(6, Math.Round(260 * Fraction(row))),
-                row.Exhausted ? UsageBarOverBrush : UsageBarBrush,
-                row.Exhausted ? UsageBarOverBrush : UsageTextBrush))
-            .ToList();
-        AppUsageEmpty.Visibility = Visibility.Collapsed;
-
-        var usedCount = tracked.Count(r => r.UsedMinutes > 0);
-        var overCount = tracked.Count(r => r.Exhausted);
-        AppUsageHint.Text = overCount > 0
-            ? $"{usedCount} 款在用 · {overCount} 款额度用完"
-            : $"{usedCount} 款在用";
-    }
-
-    /// <summary>设置页里「给单个软件单独限时」的候选与已设限额。</summary>
-    private void RefreshAppLimits()
-    {
-        var desk = DeskList.SelectedItem as Desk;
-        var choices = (desk?.Apps ?? [])
-            .GroupBy(a => a.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First())
-            .OrderBy(a => a.DisplayName, StringComparer.CurrentCultureIgnoreCase)
-            .Select(a => new AppLimitChoice(a.Key, a.DisplayName))
-            .ToList();
-        LimitAppCombo.ItemsSource = choices;
-        if (LimitAppCombo.SelectedItem is null && choices.Count > 0)
+        if (remaining <= TimeSpan.FromMinutes(5))
         {
-            LimitAppCombo.SelectedIndex = 0;
+            return "还剩 5 分钟，准备收尾啦。";
         }
 
-        var limits = (desk?.LimitedApps ?? [])
-            .Where(a => a.DailyMinutes is > 0)
-            .Select(a => new AppLimitRow(a.Key, a.DisplayName, $"每天 {a.DailyMinutes} 分钟"))
-            .ToList();
-        AppLimitList.ItemsSource = limits;
-        AppLimitList.Visibility = limits.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-        AppLimitEmpty.Visibility = limits.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private void AddAppLimit_Click(object sender, RoutedEventArgs e)
-    {
-        if (DeskList.SelectedItem is not Desk desk)
-        {
-            return;
-        }
-
-        if (LimitAppCombo.SelectedValue is not string key)
-        {
-            ParentHint.Text = "先从下拉框里挑一款软件。";
-            return;
-        }
-
-        if (!int.TryParse(LimitMinutesBox.Text.Trim(), out var minutes))
-        {
-            ParentHint.Text = "分钟数要填数字，范围 5–600。";
-            return;
-        }
-
-        var limited = desk.WithAppLimit(key, minutes);
-        if (ReferenceEquals(limited, desk))
-        {
-            ParentHint.Text = "这条限额已经是这样了。";
-            return;
-        }
-
-        ParentHint.Text = string.Empty;
-        LimitMinutesBox.Text = string.Empty;
-        SaveDesk(limited);
-    }
-
-    private void RemoveAppLimit_Click(object sender, RoutedEventArgs e)
-    {
-        if (DeskList.SelectedItem is not Desk desk)
-        {
-            return;
-        }
-
-        if ((sender as FrameworkElement)?.Tag is not string key)
-        {
-            return;
-        }
-
-        SaveDesk(desk.WithAppLimit(key, null));
-    }
-
-    private void CopyRecovery_Click(object sender, RoutedEventArgs e)
-    {
-        var code = _host.Family?.RecoveryCode;
-        if (string.IsNullOrWhiteSpace(code))
-        {
-            RecoveryHint.Text = _host.IsRemote
-                ? "守护服务不再显示找回码；请翻出首次设置时抄下的那枚。"
-                : "还没有生成找回码，先完成家长设置。";
-            return;
-        }
-
-        try
-        {
-            System.Windows.Clipboard.SetText(code);
-            RecoveryHint.Text = "已复制到剪贴板，请粘贴到备忘或纸质本子上。";
-        }
-        catch (Exception)
-        {
-            RecoveryHint.Text = "复制失败，请手动抄下来。";
-        }
-    }
-
-    private void RefreshWeekUsage()
-    {
-        if (DateTime.Now < _weekUsageNextRead)
-        {
-            return;
-        }
-
-        _weekUsageNextRead = DateTime.Now.AddSeconds(30);
-
-        var history = _usageLog.ReadRecent(6);
-        var usedToday = _host.IsConfigured ? _host.Budget.Used : TimeSpan.Zero;
-        if (history.Count == 0 && usedToday <= TimeSpan.Zero)
-        {
-            WeekUsageList.ItemsSource = null;
-            WeekUsageEmpty.Visibility = Visibility.Visible;
-            return;
-        }
-
-        var maxMinutes = Math.Max(1, Math.Max(
-            usedToday.TotalMinutes,
-            history.Count == 0 ? 1 : history.Max(d => d.UsedMinutes)));
-        double BarHeightFor(double minutes) => Math.Max(6, Math.Round(110 * minutes / maxMinutes));
-
-        var rows = new List<WeekUsageRow>();
-        if (usedToday > TimeSpan.Zero)
-        {
-            rows.Add(new WeekUsageRow(
-                "今天",
-                BarHeightFor(usedToday.TotalMinutes),
-                $"已用 {FormatMinutes(usedToday)} / {FormatMinutes(_host.Budget.Limit)}"));
-        }
-
-        foreach (var day in history)
-        {
-            var summary = FormatMinutes(TimeSpan.FromMinutes(day.UsedMinutes))
-                + (day.BlockedCount > 0 ? $" · 拦了 {day.BlockedCount} 次" : string.Empty);
-            rows.Add(new WeekUsageRow(
-                $"{day.Date.Month}/{day.Date.Day} {DayLabel(day.Date.DayOfWeek)}",
-                BarHeightFor(day.UsedMinutes),
-                summary));
-        }
-
-        WeekUsageList.ItemsSource = rows;
-        WeekUsageEmpty.Visibility = Visibility.Collapsed;
+        return "还剩 10 分钟，快到时间了。";
     }
 
     private static string DayLabel(DayOfWeek day) => day switch
@@ -1818,121 +2269,9 @@ public partial class MainWindow : Window
         _ => "周日",
     };
 
-    private void Render(SessionSnapshot snapshot, string? hint = null)
+    private static string VersionText()
     {
-        var child = snapshot.Phase is SessionPhase.InDesk or SessionPhase.TimeUp;
-        ShowChild(child);
-        Background = (Brush)FindResource(child ? "PaperDeepBrush" : "PaperBrush");
-        AskParentButton.Visibility = snapshot.Parental ? Visibility.Visible : Visibility.Collapsed;
-        AskParentNight.Visibility = AskParentButton.Visibility;
-
-        // 时间用完切到夜晚锁屏面板（ui-03），其余状态留在书桌场景（ui-02）。
-        var timeUp = snapshot.Phase == SessionPhase.TimeUp;
-        DeskPanel.Visibility = timeUp ? Visibility.Collapsed : Visibility.Visible;
-        TimeUpPanel.Visibility = timeUp ? Visibility.Visible : Visibility.Collapsed;
-
-        // 守护中不给「×」：点了也不会退出，留着只会让孩子一直试。
-        CloseButton.Visibility = snapshot.Parental && child ? Visibility.Collapsed : Visibility.Visible;
-
-        if (!child)
-        {
-            FirstRunPinPanel.Visibility = _host.IsConfigured ? Visibility.Collapsed : Visibility.Visible;
-            GuardButton.IsEnabled = DeskList.SelectedItem is Desk d && d.Apps.Count > 0;
-            UpdateDashboard(snapshot);
-            return;
-        }
-
-        UpdateStatusPill(snapshot);
-
-        RemainingText.Text = FormatRemaining(snapshot.Remaining);
-        AskMoreButton.Visibility = snapshot.Phase == SessionPhase.TimeUp && snapshot.Parental
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        if (snapshot.Phase == SessionPhase.TimeUp)
-        {
-            ChildCaption.Text = "今天的屏幕时间用完了";
-            TimeUpHint.Text = string.IsNullOrWhiteSpace(hint)
-                ? "明天早上自动恢复；家长可以加时，或输入密码结束守护。已锁屏的话，登录后会自动弹出此界面。"
-                : hint;
-            ChildAppChips.ItemsSource = null;
-        }
-        else if (!snapshot.Parental)
-        {
-            ChildCaption.Text = "试拦截还剩";
-            ChildHint.Text = string.IsNullOrWhiteSpace(hint)
-                ? "只留计算器。打开记事本应被关掉。"
-                : hint;
-            ChildAppChips.ItemsSource = BuiltinDesks.Spike().Apps;
-        }
-        else
-        {
-            ChildCaption.Text = "今天还剩";
-            var desk = snapshot.DeskId is null ? null : _host.FindDesk(snapshot.DeskId);
-            ChildAppChips.ItemsSource = desk?.Apps;
-            ChildHint.Text = string.IsNullOrWhiteSpace(hint) ? ChildHintFor(snapshot) : hint;
-        }
-    }
-
-    private string ChildHintFor(SessionSnapshot snapshot)
-    {
-        var desk = snapshot.DeskId is null ? null : _host.FindDesk(snapshot.DeskId);
-        var names = desk?.Apps
-            .Select(a => a.DisplayName)
-            .Distinct(StringComparer.CurrentCultureIgnoreCase)
-            .Take(6)
-            .ToArray() ?? [];
-        return names.Length == 0
-            ? "现在只能用系统桌面。其它软件会被关掉。"
-            : $"只能用 {string.Join("、", names)}。其它软件会被关掉。";
-    }
-
-    private static string FormatRemaining(TimeSpan remaining)
-    {
-        if (remaining.TotalHours >= 1)
-        {
-            return $"{(int)remaining.TotalHours}:{remaining.Minutes:D2}:{remaining.Seconds:D2}";
-        }
-
-        return remaining.ToString(@"mm\:ss");
-    }
-
-    private void ShowChild(bool on)
-    {
-        // 守护中隐藏侧边栏（连列宽一起归零），孩子视图独占整个窗口。
-        Sidebar.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
-        SidebarColumn.Width = on ? new GridLength(0) : new GridLength(232);
-
-        if (on && ChildRoot.Visibility != Visibility.Visible)
-        {
-            Fade(ParentHost, 1, 0, () =>
-            {
-                ParentHost.Visibility = Visibility.Collapsed;
-                ParentHost.Opacity = 1;
-            });
-            ChildRoot.Opacity = 0;
-            ChildRoot.Visibility = Visibility.Visible;
-            Fade(ChildRoot, 0, 1, null);
-        }
-        else if (!on && ParentHost.Visibility != Visibility.Visible)
-        {
-            Fade(ChildRoot, 1, 0, () =>
-            {
-                ChildRoot.Visibility = Visibility.Collapsed;
-                ChildRoot.Opacity = 1;
-            });
-            ParentHost.Opacity = 0;
-            ParentHost.Visibility = Visibility.Visible;
-            Fade(ParentHost, 0, 1, null);
-        }
-    }
-
-    private static void Fade(UIElement element, double from, double to, Action? done)
-    {
-        var animation = new DoubleAnimation(from, to, TimeSpan.FromMilliseconds(220))
-        {
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut },
-        };
-        animation.Completed += (_, _) => done?.Invoke();
-        element.BeginAnimation(OpacityProperty, animation);
+        var v = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version;
+        return v is null ? "开发版" : $"v{v.Major}.{v.Minor}.{v.Build}";
     }
 }

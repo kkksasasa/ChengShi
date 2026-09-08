@@ -88,4 +88,53 @@ public class SessionStateMachineTests
         Assert.Equal(TimeSpan.Zero, lockedOut.Remaining);
         Assert.Equal(SessionPhase.TimeUp, machine.Phase);
     }
+
+    [Fact]
+    public void Parental_session_keeps_desk_open_during_save_grace()
+    {
+        var clock = new ManualClock();
+        var machine = new SessionStateMachine(clock);
+        machine.StartParental(BuiltinDesks.Spike(), TimeSpan.FromMinutes(10), "hash", TimeSpan.FromMinutes(2));
+
+        // 额度走完：场次不散、倒计时停在 0，宽限倒计时开始。
+        clock.Advance(TimeSpan.FromMinutes(10));
+        var grace = machine.Tick();
+        Assert.Equal(SessionPhase.InDesk, grace.Phase);
+        Assert.Equal(TimeSpan.Zero, grace.Remaining);
+        Assert.InRange(grace.GraceRemaining.TotalSeconds, 119, 121);
+
+        // 宽限耗尽才进入「时间用完」。
+        clock.Advance(TimeSpan.FromMinutes(2));
+        Assert.Equal(SessionPhase.TimeUp, machine.Tick().Phase);
+    }
+
+    [Fact]
+    public void Session_without_grace_expires_immediately()
+    {
+        var clock = new ManualClock();
+        var machine = new SessionStateMachine(clock);
+        machine.Start(BuiltinDesks.Spike(), TimeSpan.FromMinutes(10), pinned: false, pin: null);
+        clock.Advance(TimeSpan.FromMinutes(10));
+        Assert.Equal(SessionPhase.Idle, machine.Tick().Phase);
+    }
+
+    [Fact]
+    public void Extend_during_grace_pulls_the_session_out_of_grace()
+    {
+        var clock = new ManualClock();
+        var machine = new SessionStateMachine(clock);
+        machine.StartParental(BuiltinDesks.Spike(), TimeSpan.FromMinutes(10), "hash", TimeSpan.FromMinutes(2));
+
+        clock.Advance(TimeSpan.FromMinutes(11));
+        Assert.Equal(SessionPhase.InDesk, machine.Phase);
+
+        // 家长在宽限内批了 5 分钟：剩余时间恢复、宽限倒计时清零。
+        var extended = machine.Extend(TimeSpan.FromMinutes(5));
+        Assert.Equal(SessionPhase.InDesk, extended.Phase);
+        Assert.Equal(TimeSpan.FromMinutes(4), extended.Remaining);
+        Assert.Equal(TimeSpan.Zero, extended.GraceRemaining);
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+        Assert.Equal(SessionPhase.TimeUp, machine.Tick().Phase);
+    }
 }

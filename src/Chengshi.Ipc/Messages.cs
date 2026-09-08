@@ -41,7 +41,7 @@ public sealed record GetConfigRequest : ClientMessage;
 
 public sealed record StartGuardRequest : ClientMessage;
 
-public sealed record StartSessionRequest(string DeskId, int DurationMinutes, bool Pinned, string? Pin)
+public sealed record StartSessionRequest(string DeskId, int DurationMinutes, bool Pinned, string? Pin, double GraceMinutes = 0)
     : ClientMessage;
 
 public sealed record StopSessionRequest(string? Pin) : ClientMessage;

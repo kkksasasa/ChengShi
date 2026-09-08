@@ -171,7 +171,7 @@ public partial class App : System.Windows.Application
         catch (Exception)
         {
             startupHint = "没连上守护服务：断网和防强杀不生效。安装并启动澄时服务后自动升级。";
-            return new SessionHost();
+            return new SessionHost(lockProbe: WtsWorkstationLockProbe.Instance);
         }
     }
 

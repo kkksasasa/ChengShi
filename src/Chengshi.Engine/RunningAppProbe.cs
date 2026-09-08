@@ -27,6 +27,42 @@ public sealed class ProcessRunningAppProbe : IRunningAppProbe
             byStem[Stem(app.FileName)] = app.Key;
         }
 
+        // 「整个电脑」场景不限软件：把交互会话里所有进程都记进来（按进程名），
+        // 统计页才能看到时间都花在哪些软件上。
+        if (desk.Unrestricted && byStem.Count == 0)
+        {
+            var activeNow = ActiveSession.ConsoleSessionId;
+            if (activeNow == 0)
+            {
+                return running;
+            }
+
+            foreach (var process in Process.GetProcesses())
+            {
+                try
+                {
+                    if (process.Id == Environment.ProcessId
+                        || activeNow == 0
+                        || process.SessionId != activeNow)
+                    {
+                        continue;
+                    }
+
+                    running.Add(process.ProcessName);
+                }
+                catch (Exception)
+                {
+                    // 进程瞬时退出，跳过。
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            }
+
+            return running;
+        }
+
         if (byStem.Count == 0)
         {
             return running;

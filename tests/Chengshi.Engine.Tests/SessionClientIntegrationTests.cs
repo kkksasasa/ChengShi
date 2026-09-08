@@ -190,8 +190,9 @@ public class SessionClientIntegrationTests : IDisposable
             Assert.True(client.VerifyParentPin("1234"));
             Assert.Equal(StartSessionStatus.Started, client.StartGuard().Status);
 
-            clock.Advance(TimeSpan.FromMinutes(60));
+            clock.Advance(TimeSpan.FromMinutes(63));
             // client.Tick() 只回本地缓存；错误的加时请求会带回服务端最新快照。
+            // 63 分钟 = 60 分钟额度 + 2 分钟保存宽限 + 余量，此刻确实超时。
             var probe = client.GrantExtra("0000", 15);
             Assert.False(probe.Ok);
             Assert.Equal(SessionPhase.TimeUp, probe.Snapshot.Phase);

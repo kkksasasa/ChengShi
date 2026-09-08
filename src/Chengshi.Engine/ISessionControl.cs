@@ -46,7 +46,7 @@ public interface ISessionControl : IDisposable
     Task SaveSmtpAsync(SmtpConfig config);
 
     StartSessionResult StartGuard();
-    StartSessionResult Start(string deskId, TimeSpan duration, bool pinned, string? pin);
+    StartSessionResult Start(string deskId, TimeSpan duration, bool pinned, string? pin, TimeSpan grace = default);
     StopSessionResult Stop(string? pin);
     GrantExtraResult GrantExtra(string? pin, int minutes);
     SessionSnapshot Tick();

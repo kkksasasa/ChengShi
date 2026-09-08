@@ -30,6 +30,7 @@ public sealed class SessionHost : ISessionControl
     private readonly PinGate _pinGate;
     private readonly SmtpStore _smtpStore;
     private readonly PinRecoveryService _emailRecovery;
+    private readonly IWorkstationLockProbe _lockProbe;
     private readonly Func<DateTime> _now;
     private int _blockedToday;
     private DateOnly _appUsageDate;
@@ -48,6 +49,12 @@ public sealed class SessionHost : ISessionControl
 
     /// <summary>家长验证过密码后的“宽限期”：期内不再强制锁屏，给家长从容加时或结束守护。</summary>
     private const double UnlockGraceMinutes = 3d;
+
+    /// <summary>
+    /// 时间到后留给孩子的「保存进度」宽限：期内书桌软件还能用（把游戏存档、文档保存完），
+    /// 额度不再多扣（Remaining 已为 0），宽限结束才清场 + 锁屏。
+    /// </summary>
+    private static readonly TimeSpan SaveGrace = TimeSpan.FromMinutes(2);
 
     /// <summary>ETW 监听挂掉后的重试间隔。</summary>
     private const double EtwRetrySeconds = 30d;
@@ -69,7 +76,8 @@ public sealed class SessionHost : ISessionControl
         IRunningAppProbe? probe = null,
         AppUsageStore? appUsageStore = null,
         SmtpStore? smtpStore = null,
-        IEmailSender? emailSender = null)
+        IEmailSender? emailSender = null,
+        IWorkstationLockProbe? lockProbe = null)
     {
         _clock = clock ?? new QueryUnbiasedInterruptClock();
         _calendar = calendar ?? new SystemCalendar();
@@ -81,6 +89,7 @@ public sealed class SessionHost : ISessionControl
         _probe = probe ?? new ProcessRunningAppProbe();
         _appUsageStore = appUsageStore ?? new AppUsageStore();
         _smtpStore = smtpStore ?? new SmtpStore();
+        _lockProbe = lockProbe ?? new NullWorkstationLockProbe();
         // 测试注入发信器时直接用；否则从 SMTP 配置现取（家长中途改配置也能生效）。
         _emailRecovery = emailSender is null
             ? new PinRecoveryService(new ResolvingEmailSender(ResolveEmailSender))
@@ -445,7 +454,7 @@ public sealed class SessionHost : ISessionControl
 
         RolloverIfNewDay();
         var desk = FindDesk(Family.DeskId) ?? _store.Desks.FirstOrDefault() ?? BuiltinDesks.Homework();
-        var result = _machine.StartParental(desk, _time.Budget.Remaining, Family.PinHash);
+        var result = _machine.StartParental(desk, _time.Budget.Remaining, Family.PinHash, SaveGrace);
         if (result.Status == StartSessionStatus.Started)
         {
             // 用「有效书桌」做首轮清场：昨天额度就用完的软件不该因为重启澄时而复活。
@@ -488,7 +497,7 @@ public sealed class SessionHost : ISessionControl
     private void GrantUnlockGrace() =>
         _unlockGraceUntil = DateTimeOffset.UtcNow.AddMinutes(UnlockGraceMinutes);
 
-    public StartSessionResult Start(string deskId, TimeSpan duration, bool pinned, string? pin)
+    public StartSessionResult Start(string deskId, TimeSpan duration, bool pinned, string? pin, TimeSpan grace = default)
     {
         var desk = FindDesk(deskId);
         if (desk is null)
@@ -496,12 +505,12 @@ public sealed class SessionHost : ISessionControl
             return new StartSessionResult(StartSessionStatus.UnknownDesk, _machine.Snapshot());
         }
 
-        if (desk.Apps.Count == 0)
+        if (desk.Apps.Count == 0 && !desk.Unrestricted)
         {
             throw new ArgumentException("先添加至少一款允许使用的软件。");
         }
 
-        var result = _machine.Start(desk, duration, pinned, pin);
+        var result = _machine.Start(desk, duration, pinned, pin, grace);
         if (result.Status == StartSessionStatus.Started)
         {
             _enforcer.SweepRunning(desk);
@@ -528,7 +537,25 @@ public sealed class SessionHost : ISessionControl
         RolloverIfNewDay();
         var previous = _machine.Current;
         var snapshot = _machine.Tick();
-        SampleAppUsage();
+        var elapsed = _clock.Elapsed.TotalSeconds;
+        var delta = elapsed - _lastUsageSample;
+        _lastUsageSample = elapsed;
+
+        // 锁屏期间冻结记账：总时长把流逝的秒数还给场次，各软件用量也暂停累计。
+        // 睡眠/休眠本来就由单调时钟天然排除，这里补上「锁屏人不在」的口径。
+        // 退款要在快照/落账之前做，界面与「已用」看到的才是冻结后的口径。
+        var locked = previous is { LockedOut: false }
+            && snapshot.Phase == SessionPhase.InDesk
+            && delta > 0
+            && delta <= MaxUsageSampleSeconds
+            && _lockProbe.IsLocked(ActiveSession.ConsoleSessionId);
+        if (locked)
+        {
+            _machine.Extend(TimeSpan.FromSeconds(delta));
+            snapshot = _machine.Snapshot();
+        }
+
+        SampleAppUsage(snapshot, delta, elapsed, locked);
         PersistUsage(snapshot);
         if (snapshot.Phase == SessionPhase.TimeUp
             && previous is { LockedOut: false }
@@ -673,20 +700,30 @@ public sealed class SessionHost : ISessionControl
         }
     }
 
-    /// <summary>跨天时把昨天用掉的时间和拦下的次数写进用量日志。</summary>
+    /// <summary>跨天时把昨天用掉的时间、拦下的次数和各软件的分钟数写进用量日志。</summary>
     private void LogYesterday()
     {
         var yesterday = _time.Budget;
         var blockedCount = Volatile.Read(ref _blockedToday);
         var usedMinutes = (int)Math.Round(yesterday.Used.TotalMinutes);
+        var apps = AppMinutesSnapshot();
         if (usedMinutes <= 0 && blockedCount <= 0)
         {
             return;
         }
 
         // 跨天瞬间 calendar 已指向今天，昨天的日期要从预算行拿。
-        _usageLog.Append(new UsageDay(yesterday.Date, usedMinutes, blockedCount));
+        _usageLog.Append(new UsageDay(yesterday.Date, usedMinutes, blockedCount, apps));
     }
+
+    /// <summary>当天各软件的分钟数快照（写进用量日志，统计页看历史分布用）。</summary>
+    private IReadOnlyDictionary<string, int> AppMinutesSnapshot() =>
+        _appUsage.Snapshot()
+            .Where(pair => pair.Value > 0)
+            .ToDictionary(
+                pair => pair.Key,
+                pair => (int)Math.Round(pair.Value / 60d, MidpointRounding.AwayFromZero),
+                StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// 家长批准加时：孩子来申请，家长当场输密码。正在书桌里就顺延场次；
@@ -723,7 +760,7 @@ public sealed class SessionHost : ISessionControl
             // 锁死状态下额度已耗尽，加时后的剩余时间就是刚批的部分。
             var remaining = _time.Budget.Remaining;
             var duration = remaining > amount ? remaining : amount;
-            var result = _machine.StartParental(desk, duration, Family.PinHash);
+            var result = _machine.StartParental(desk, duration, Family.PinHash, SaveGrace);
             if (result.Status != StartSessionStatus.Started)
             {
                 return new GrantExtraResult(false, "没能重新开始守护，再试一次。", _machine.Snapshot());
@@ -824,21 +861,22 @@ public sealed class SessionHost : ISessionControl
 
     /// <summary>
     /// 按真实流逝时间给「正在运行的被允许软件」记账。只在书桌会话进行中计，
-    /// 与每天总额度的口径保持一致。
+    /// 与每天总额度的口径保持一致；锁屏期间暂停。
     /// </summary>
-    private void SampleAppUsage()
+    private void SampleAppUsage(SessionSnapshot snapshot, double delta, double elapsed, bool locked)
     {
-        var elapsed = _clock.Elapsed.TotalSeconds;
-        var delta = elapsed - _lastUsageSample;
-        _lastUsageSample = elapsed;
-
         if (delta <= 0)
         {
             return;
         }
 
-        var desk = _machine.Current?.Desk;
-        if (desk is null || delta > MaxUsageSampleSeconds)
+        if (snapshot.Phase != SessionPhase.InDesk || locked || delta > MaxUsageSampleSeconds)
+        {
+            return;
+        }
+
+        var desk = snapshot.DeskId is null ? null : CurrentDesk();
+        if (desk is null)
         {
             return;
         }

@@ -13,11 +13,13 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Chengshi.Engine\Chengshi.Engine.csproj" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
     <Resource Include="Assets\chengshi.ico" />
     <Resource Include="Assets\donate-alipay.jpg" />
     <Resource Include="Assets\donate-wechat.jpg" />
     <Content Include="Assets\chengshi.ico" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\chengshi.ico" CopyToOutputDirectory="PreserveNewest" Link="chengshi.ico" />
+    <Content Include="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" />
     <None Include="startup.vbs" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>

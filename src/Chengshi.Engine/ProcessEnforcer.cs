@@ -33,6 +33,12 @@ public class ProcessEnforcer : IProcessEnforcer
             return false;
         }
 
+        // 「整个电脑」场景：不限软件，进程一律放行；计时长与到点锁屏由会话状态机负责。
+        if (desk.Unrestricted)
+        {
+            return false;
+        }
+
         if (_matcher.IsAllowed(process, desk))
         {
             return false;

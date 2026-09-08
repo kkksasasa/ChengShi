@@ -22,7 +22,8 @@ public sealed record DeskSession(
     bool Pinned,
     string? PinHash,
     bool Parental = false,
-    bool LockedOut = false)
+    bool LockedOut = false,
+    TimeSpan Grace = default)
 {
     public TimeSpan EndElapsed => StartElapsed + Duration;
 
@@ -38,6 +39,20 @@ public sealed record DeskSession(
     }
 
     public bool IsExpired(TimeSpan now) => !LockedOut && now >= EndElapsed;
+
+    /// <summary>时间到但还在「保存进度」宽限内：场次没散，额度也不再走。</summary>
+    public bool InGrace(TimeSpan now) => !LockedOut && now >= EndElapsed && now < EndElapsed + Grace;
+
+    public TimeSpan GraceRemaining(TimeSpan now)
+    {
+        if (!InGrace(now))
+        {
+            return TimeSpan.Zero;
+        }
+
+        var left = EndElapsed + Grace - now;
+        return left < TimeSpan.Zero ? TimeSpan.Zero : left;
+    }
 }
 
 public sealed record SessionSnapshot(
@@ -47,7 +62,8 @@ public sealed record SessionSnapshot(
     TimeSpan Remaining,
     bool Pinned,
     bool DisconnectNetwork,
-    bool Parental = false)
+    bool Parental = false,
+    TimeSpan GraceRemaining = default)
 {
     public bool IsGuarding => Parental && Phase is SessionPhase.InDesk or SessionPhase.TimeUp;
 }

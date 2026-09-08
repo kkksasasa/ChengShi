@@ -44,7 +44,7 @@ public sealed class SessionStateMachine
         }
     }
 
-    public StartSessionResult Start(Desk desk, TimeSpan duration, bool pinned, string? pin)
+    public StartSessionResult Start(Desk desk, TimeSpan duration, bool pinned, string? pin, TimeSpan grace = default)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(duration, TimeSpan.Zero);
         lock (_gate)
@@ -66,12 +66,12 @@ public sealed class SessionStateMachine
                 pinHash = PinHasher.Hash(pin);
             }
 
-            _current = new DeskSession(desk, _clock.Elapsed, duration, pinned, pinHash);
+            _current = new DeskSession(desk, _clock.Elapsed, duration, pinned, pinHash, Grace: grace);
             return new StartSessionResult(StartSessionStatus.Started, SnapshotUnlocked());
         }
     }
 
-    public StartSessionResult StartParental(Desk desk, TimeSpan duration, string pinHash)
+    public StartSessionResult StartParental(Desk desk, TimeSpan duration, string pinHash, TimeSpan grace = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(pinHash);
         lock (_gate)
@@ -94,7 +94,8 @@ public sealed class SessionStateMachine
                     duration,
                     Pinned: true,
                     pinHash,
-                    Parental: true);
+                    Parental: true,
+                    Grace: grace);
             }
 
             return new StartSessionResult(StartSessionStatus.Started, SnapshotUnlocked());
@@ -161,7 +162,14 @@ public sealed class SessionStateMachine
 
     private void ExpireIfNeeded()
     {
-        if (_current is null || !_current.IsExpired(_clock.Elapsed))
+        if (_current is null || _current.LockedOut)
+        {
+            return;
+        }
+
+        var now = _clock.Elapsed;
+        // 没到点，或到点后仍在「保存进度」宽限内：场次保持原样。
+        if (now < _current.EndElapsed + _current.Grace)
         {
             return;
         }
@@ -201,13 +209,15 @@ public sealed class SessionStateMachine
             return new SessionSnapshot(SessionPhase.Idle, null, null, TimeSpan.Zero, false, false);
         }
 
+        var now = _clock.Elapsed;
         return new SessionSnapshot(
             PhaseUnlocked(),
             _current.Desk.Id,
             _current.Desk.Name,
-            _current.Remaining(_clock.Elapsed),
+            _current.Remaining(now),
             _current.Pinned,
             _current.Desk.DisconnectNetwork,
-            _current.Parental);
+            _current.Parental,
+            _current.GraceRemaining(now));
     }
 }

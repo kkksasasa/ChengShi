@@ -10,8 +10,16 @@ public sealed record Desk(
     bool DisconnectNetwork = false,
     IReadOnlyList<string>? AllowedSites = null,
     IReadOnlyList<string>? BlockedSites = null,
-    IReadOnlyList<string>? BlockCategories = null)
+    IReadOnlyList<string>? BlockCategories = null,
+    bool Unrestricted = false)
 {
+    /// <summary>
+    /// 不限软件模式（「整个电脑」场景）：所有软件、网站一律放行，
+    /// 守护只负责计时长和到点锁屏。时间用完的 Lockdown 清场不受本标志影响。
+    /// </summary>
+    [JsonIgnore]
+    public bool RestrictsApps => !Unrestricted;
+
     [JsonIgnore]
     public IReadOnlyList<AllowRule> Rules => Expand(Apps);
 

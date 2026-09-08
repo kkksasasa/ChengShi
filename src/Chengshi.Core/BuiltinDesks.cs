@@ -7,6 +7,7 @@ public static class BuiltinDesks
     public const string CodeId = "code";
     public const string SpikeId = "spike";
     public const string LockdownId = "lockdown";
+    public const string FullPcId = "fullpc";
 
     public static IReadOnlyList<Desk> All { get; } =
     [
@@ -28,6 +29,11 @@ public static class BuiltinDesks
         if (string.Equals(id, LockdownId, StringComparison.OrdinalIgnoreCase))
         {
             return Lockdown();
+        }
+
+        if (string.Equals(id, FullPcId, StringComparison.OrdinalIgnoreCase))
+        {
+            return FullPc();
         }
 
         return All.FirstOrDefault(d => string.Equals(d.Id, id, StringComparison.OrdinalIgnoreCase));
@@ -97,6 +103,14 @@ public static class BuiltinDesks
             App("Git", "git"),
         ],
         BlockCategories: ["games", "adult"]);
+
+    /// <summary>「整个电脑」场景：不限软件、不限网站，守护只计时长和到点锁屏。</summary>
+    public static Desk FullPc() => new(
+        FullPcId,
+        "整个电脑",
+        "不限制软件：整台电脑都能用，只受每天时长约束",
+        [],
+        Unrestricted: true);
 
     public static Desk Lockdown() => new(
         LockdownId,

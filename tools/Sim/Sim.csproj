@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Chengshi.Sim</RootNamespace>
+    <AssemblyName>sim</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Chengshi.Core\Chengshi.Core.csproj" />
+    <ProjectReference Include="..\..\src\Chengshi.Engine\Chengshi.Engine.csproj" />
+  </ItemGroup>
+</Project>

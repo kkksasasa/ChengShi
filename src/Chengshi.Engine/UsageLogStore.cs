@@ -3,11 +3,20 @@ using Chengshi.Core;
 
 namespace Chengshi.Engine;
 
-public sealed record UsageDay(DateOnly Date, int UsedMinutes, int BlockedCount);
+/// <summary>
+/// 一天的用量流水。Apps 为「应用键 → 分钟数」，是可选的历史数据：
+/// 老日志行没有该字段（为 null），统计页对缺失的天只画总量。
+/// </summary>
+public sealed record UsageDay(
+    DateOnly Date,
+    int UsedMinutes,
+    int BlockedCount,
+    IReadOnlyDictionary<string, int>? Apps = null);
 
 /// <summary>
-/// 每天的用量流水（JSON Lines，一天一行）：跨天重置时把昨天的总用量和拦截次数落盘，
-/// 给家长看「最近一周用了多少」。写失败静默——报表缺一天不比守护中断更糟。
+/// 每天的用量流水（JSON Lines，一天一行）：跨天重置时把昨天的总用量、拦截次数
+/// 和每个软件的分钟数落盘，给家长看「最近用了多少、都花在哪些软件上」。
+/// 写失败静默——报表缺一天不比守护中断更糟。
 /// </summary>
 public sealed class UsageLogStore
 {

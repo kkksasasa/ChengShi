@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>澄时故障排查</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --background: #f4f7f5;
+      --surface: #ffffff;
+      --ink: #182a26;
+      --muted: #5d6f6a;
+      --accent: #0d6b58;
+      --accent-light: #e8f4f0;
+      --border: #dce6e2;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--background);
+      color: var(--ink);
+      font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+      line-height: 1.7;
+    }
+
+    main {
+      width: min(940px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 40px 0 56px;
+    }
+
+    .hero,
+    section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 26px 30px;
+    }
+
+    .hero {
+      margin-bottom: 18px;
+    }
+
+    section + section {
+      margin-top: 18px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      line-height: 1.25;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      padding-left: 12px;
+      border-left: 5px solid var(--accent);
+      font-size: 21px;
+      line-height: 1.3;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .quick-links {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 18px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .quick-links a {
+      display: block;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--accent-light);
+      color: var(--accent);
+      font-weight: 650;
+      text-decoration: none;
+    }
+
+    .quick-links a:hover,
+    .quick-links a:focus-visible {
+      border-color: #a9d3c8;
+      text-decoration: underline;
+    }
+
+    .symptom,
+    .solution {
+      margin: 8px 0;
+      padding: 12px 16px;
+      border-radius: 8px;
+    }
+
+    .symptom {
+      background: #f7f8f8;
+      border: 1px solid var(--border);
+    }
+
+    .solution {
+      background: var(--accent-light);
+      border: 1px solid #c8e2da;
+    }
+
+    .label {
+      display: block;
+      margin-bottom: 3px;
+      font-weight: 700;
+    }
+
+    .symptom .label {
+      color: var(--muted);
+    }
+
+    .solution .label {
+      color: var(--accent);
+    }
+
+    section :last-child {
+      margin-bottom: 0;
+    }
+
+    @media (max-width: 600px) {
+      main {
+        width: 100%;
+        padding-top: 20px;
+      }
+
+      .hero,
+      section {
+        padding: 20px;
+        border-left: 0;
+        border-right: 0;
+        border-radius: 0;
+      }
+
+      h1 {
+        font-size: 25px;
+      }
+
+      h2 {
+        font-size: 19px;
+      }
+
+      .quick-links {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <h1>澄时故障排查</h1>
+      <p>按常见现象快速定位问题，并在家长账户中完成处理。</p>
+    </header>
+
+    <section id="quick-index" aria-labelledby="quick-index-heading">
+      <h2 id="quick-index-heading">速查</h2>
+      <ul class="quick-links">
+        <li><a href="#guard-not-active">守护未生效</a></li>
+        <li><a href="#time-not-counted">时间不计入</a></li>
+        <li><a href="#network-block-failed">断网失败</a></li>
+        <li><a href="#recovery-code-lost">找回码丢失</a></li>
+      </ul>
+    </section>
+
+    <section id="guard-not-active" aria-labelledby="guard-not-active-heading">
+      <h2 id="guard-not-active-heading">守护未生效</h2>
+      <p class="symptom"><span class="label">现象</span>点击「开始守护」后，孩子仍能打开名单外的软件；或重启电脑后，守护没有自动恢复。</p>
+      <p class="solution"><span class="label">处理：</span>先用家长账户打开澄时，查看首页是否显示「守护服务未连接」。若未连接，请以管理员身份重新安装或启动澄时服务，再确认「开机后自动开始守护」已开启。孩子账户必须是标准用户；管理员权限可能绕过本机守护边界。</p>
+    </section>
+
+    <section id="time-not-counted" aria-labelledby="time-not-counted-heading">
+      <h2 id="time-not-counted-heading">时间不计入</h2>
+      <p class="symptom"><span class="label">现象</span>孩子已经在使用电脑，但家长仪表盘里的剩余时间减少很慢、不减少，或新的一天没有自动重置。</p>
+      <p class="solution"><span class="label">处理：</span>先确认「开始守护」处于开启状态，再检查孩子使用的是不是当前配置的标准账户会话。不要手工改写计时数据；如最近修改过系统时间，可重启澄时服务后观察下一次跨天重置。计时使用系统单调时钟，改系统时间不会影响已累计的使用量。</p>
+    </section>
+
+    <section id="network-block-failed" aria-labelledby="network-block-failed-heading">
+      <h2 id="network-block-failed-heading">断网失败</h2>
+      <p class="symptom"><span class="label">现象</span>进入写作业书桌后，浏览器或其他软件仍能联网；也有孩子在睡觉时段还能打开视频网站。</p>
+      <p class="solution"><span class="label">处理：</span>以管理员身份打开家长界面，检查该桌面是否开启断网，确认对应会话已经进入写作业模式。可以先关闭再重新进入一次，让 Windows 防火墙规则重新生成。若规则被安全软件清理，请暂时退出冲突软件，重新开始守护并测试网页访问。</p>
+    </section>
+
+    <section id="recovery-code-lost" aria-labelledby="recovery-code-lost-heading">
+      <h2 id="recovery-code-lost-heading">找回码丢失</h2>
+      <p class="symptom"><span class="label">现象</span>家长忘记密码，当初设置时生成的找回码没有抄录或已找不到，无法进入家长界面修改设置。</p>
+      <p class="solution"><span class="label">处理：</span>若已配置备用邮箱，先在孩子锁屏或家长界面使用邮箱验证码流程重置。若没有备用邮箱，需要联系当初安装和保存备份的家庭管理员，从配置备份中处理。澄时只在首次设置或重置时展示一次找回码，不会保存明文，因此无法从界面再次查看。不要轻易删除数据目录，除非确认愿意重新设置桌面和时长。</p>
+    </section>
+  </main>
+</body>
+</html>

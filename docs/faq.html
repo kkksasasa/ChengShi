@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>澄时常见问题</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --background: #f4f7f5;
+      --surface: #ffffff;
+      --ink: #182a26;
+      --muted: #5d6f6a;
+      --accent: #0d6b58;
+      --accent-light: #e8f4f0;
+      --border: #dce6e2;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--background);
+      color: var(--ink);
+      font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+      line-height: 1.7;
+    }
+
+    main {
+      width: min(940px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 40px 0 56px;
+    }
+
+    .hero,
+    section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 26px 30px;
+    }
+
+    .hero {
+      margin-bottom: 18px;
+    }
+
+    section + section {
+      margin-top: 18px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      line-height: 1.25;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      padding-left: 12px;
+      border-left: 5px solid var(--accent);
+      font-size: 21px;
+      line-height: 1.3;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    details {
+      margin-bottom: 10px;
+      padding: 0;
+      background: #f7f8f8;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    details:last-child {
+      margin-bottom: 0;
+    }
+
+    summary {
+      position: relative;
+      padding: 12px 44px 12px 16px;
+      border-radius: 7px 7px 0 0;
+      font-weight: 650;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+
+    summary::-webkit-details-marker {
+      display: none;
+    }
+
+    summary:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+
+    summary::after {
+      content: "+";
+      position: absolute;
+      top: 50%;
+      right: 16px;
+      transform: translateY(-50%);
+      color: var(--accent);
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    details[open] {
+      background: var(--surface);
+    }
+
+    details[open] summary {
+      background: var(--accent-light);
+      color: var(--accent);
+      border-bottom: 1px solid #c8e2da;
+    }
+
+    details[open] summary::after {
+      content: "−";
+    }
+
+    .answer {
+      padding: 4px 16px 12px;
+    }
+
+    .answer p {
+      margin: 8px 0;
+    }
+
+    .answer :last-child {
+      margin-bottom: 0;
+    }
+
+    code {
+      padding: 1px 6px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #f7f8f8;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.92em;
+    }
+
+    .troubleshoot-link {
+      margin: 18px 0 0;
+      text-align: center;
+    }
+
+    .troubleshoot-link a {
+      color: var(--accent);
+      font-weight: 650;
+    }
+
+    section :last-child {
+      margin-bottom: 0;
+    }
+
+    @media (max-width: 600px) {
+      main {
+        width: 100%;
+        padding-top: 20px;
+      }
+
+      .hero,
+      section {
+        padding: 20px;
+        border-left: 0;
+        border-right: 0;
+        border-radius: 0;
+      }
+
+      h1 {
+        font-size: 25px;
+      }
+
+      h2 {
+        font-size: 19px;
+      }
+
+      summary {
+        padding-right: 40px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <h1>澄时常见问题</h1>
+      <p>点击问题即可展开答案；按安装、计时、卸载等场景整理。</p>
+    </header>
+
+    <section id="install" aria-labelledby="install-heading">
+      <h2 id="install-heading">安装与启动</h2>
+
+      <details>
+        <summary>安装澄时需要什么条件？</summary>
+        <div class="answer">
+          <p>在孩子的电脑上以管理员身份运行安装脚本 <code>scripts\install.ps1</code>（或安装包 <code>ChengshiSetup.exe</code>），它会安装到 <code>%ProgramFiles%\Chengshi</code>、注册并启动「澄时守护服务」、创建开始菜单快捷方式。之后从开始菜单打开「澄时」，设置家长密码（务必抄下找回码）、挑选允许的软件和每天时长，点「开始守护」即可。</p>
+          <p>请给孩子使用「标准用户」账号：孩子若是管理员账号，可以卸载服务绕开守护，这是 Windows 权限模型的边界。</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>安装或运行时，杀毒软件 / SmartScreen 提示「未知发布者」怎么办？</summary>
+        <div class="answer">
+          <p>这是误报。澄时的行为（锁屏、结束名单外的进程、SYSTEM 服务常驻、密码门禁）与杀软启发式盯防的「可疑行为」高度重合，而澄时是免费开源软件、没有购买代码签名证书。全部代码开源，所有数据只存本机。</p>
+          <p>安装时点「仍要运行」即可；若杀软拦截守护服务，把 <code>%ProgramFiles%\Chengshi</code> 加入白名单。不放心的话，可以直接从源码构建。</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>重启电脑后，守护还会自动生效吗？</summary>
+        <div class="answer">
+          <p>会。只要开启了「开机后自动开始守护」，守护服务（延迟自启、崩溃自动重启）开机就会自动恢复守护，孩子重启电脑也逃不掉。</p>
+          <p>若重启后守护没有恢复，请先看家长界面首页是否提示「守护服务未连接」，再参考<a href="troubleshoot.html">故障排查</a>页处理。</p>
+        </div>
+      </details>
+    </section>
+
+    <section id="time" aria-labelledby="time-heading">
+      <h2 id="time-heading">计时与额度</h2>
+
+      <details>
+        <summary>孩子把系统时间改了，能多玩一会儿吗？</summary>
+        <div class="answer">
+          <p>不能。计时基于系统单调时钟，改系统时间、改时区都不会影响已经累计的使用量，跨天重置也按真实日历执行，改时间骗不了它。</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>锁屏或睡眠的时间会扣额度吗？每天什么时候重置？</summary>
+        <div class="answer">
+          <p>不会。孩子锁屏去吃饭、电脑进入睡眠的时段都不扣时间，回到桌面后继续累计。每天的额度在跨天时自动重置；周内和周末可以分开限额，也可以给某几天单独指定分钟数。</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>时间用完会立刻锁屏吗？文档还没保存怎么办？</summary>
+        <div class="answer">
+          <p>不会搞突然袭击：最后 10 / 5 / 1 分钟孩子界面会分级提醒。时间用完后先给 2 分钟「保存进度」宽限——倒计时停在 0，书桌软件还能继续用来把存档和文档保存完，之后才清场锁屏。</p>
+          <p>锁屏桌面明天自动恢复；家长也可以当场批准孩子的加时申请，或输入家长密码提前解锁。</p>
+        </div>
+      </details>
+    </section>
+
+    <section id="uninstall" aria-labelledby="uninstall-heading">
+      <h2 id="uninstall-heading">卸载与数据</h2>
+
+      <details>
+        <summary>澄时会收集或上传孩子的数据吗？</summary>
+        <div class="answer">
+          <p>不会。澄时没有云端账号，也没有任何上传：所有配置和使用记录都只保存在本机 <code>%ProgramData%\Chengshi</code> 目录。用量日志（<code>usagelog.jsonl</code>）仅用于家长仪表盘展示最近七天用量。</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>怎么卸载澄时？卸载后数据会保留吗？</summary>
+        <div class="answer">
+          <p>管理员运行 <code>scripts\uninstall.ps1</code>，或在 Windows「设置 → 应用」里直接卸载。默认保留配置数据（家长密码、书桌设置、用量记录），以后重装可以接着用。</p>
+          <p>如果确定不再使用，运行卸载脚本时加 <code>-RemoveData</code> 参数，把数据一并删除。</p>
+        </div>
+      </details>
+    </section>
+
+    <p class="troubleshoot-link"><a href="troubleshoot.html">遇到具体故障？查看故障排查 »</a></p>
+  </main>
+</body>
+</html>
